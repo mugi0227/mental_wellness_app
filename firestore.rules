@@ -3,6 +3,25 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Helper function to check if the requester is an approved supporter with specific permissions
+    function isSupporterWithPermission(userId, permission) {
+      return exists(
+        /databases/$(database)/documents/supporterLinks
+          .where('supporterId', '==', request.auth.uid)
+          .where('userId', '==', userId)
+          .where('status', '==', 'accepted')
+          .where('permissions.' + permission, '==', true)
+      );
+    }
+
+    // Helper function to check if the requester is the user themselves OR an approved supporter.
+    // Mood graph (aiDiaryLogs) and mental hints will use this.
+    function isOwnerOrSupporter(userId, permission) {
+      return request.auth != null && (
+        request.auth.uid == userId || isSupporterWithPermission(userId, permission)
+      );
+    }
+
     match /users/{userId} {
       // 自分のプロファイルは読み書き可能
       allow read, update, delete: if request.auth != null && request.auth.uid == userId;
@@ -14,7 +33,7 @@ service cloud.firestore {
       // aiDiaryLogs (旧 moodLogs) のルール
       // AiDiaryLogモデルに必要なフィールド: userId, selfReportedMoodScore, diaryText, timestamp
       match /aiDiaryLogs/{logId} {
-        allow read: if request.auth != null && request.auth.uid == userId;
+        allow read: if isOwnerOrSupporter(userId, 'canViewMoodGraph');
         allow create: if request.auth != null &&
                        request.auth.uid == userId &&
                        request.resource.data.userId == userId &&
@@ -61,7 +80,7 @@ service cloud.firestore {
       }
 
       match /mentalHints/{hintId} {
-        allow read: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null;
         allow create, update: if request.auth != null && request.auth.uid == userId;
       }
 

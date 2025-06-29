@@ -17,6 +17,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _firestoreService = FirestoreService();
   String _email = '';
   String _password = '';
+  String _username = '';
   bool _isLogin = true;
   bool _isLoading = false;
   String? _errorMessage;
@@ -63,7 +64,7 @@ class _AuthScreenState extends State<AuthScreen> {
           final userProfile = UserProfile(
             uid: userCredential.user!.uid,
             email: _email,
-            displayName: _email.split('@')[0], // Use email prefix as initial display name
+            displayName: _username.isNotEmpty ? _username : _email.split('@')[0], // Use username or email prefix
             partnerLink: PartnerLink(status: 'no_link'),
             role: 'primary', // Default role
           );
@@ -169,6 +170,29 @@ class _AuthScreenState extends State<AuthScreen> {
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 24),
+                          // ユーザー名フィールド（サインアップ時のみ表示）
+                          if (!_isLogin) ...[
+                            TextFormField(
+                              key: const ValueKey('username'),
+                              decoration: const InputDecoration(
+                                labelText: 'ユーザー名',
+                                hintText: '表示される名前を入力',
+                              ),
+                              validator: (value) {
+                                if (value == null || value.trim().isEmpty) {
+                                  return 'ユーザー名を入力してください。';
+                                }
+                                if (value.length > 20) {
+                                  return 'ユーザー名は20文字以内で入力してください。';
+                                }
+                                return null;
+                              },
+                              onSaved: (value) {
+                                _username = value!.trim();
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                          ],
                           TextFormField(
                             key: const ValueKey('email'),
                             keyboardType: TextInputType.emailAddress,

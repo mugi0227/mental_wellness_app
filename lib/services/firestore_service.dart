@@ -460,7 +460,7 @@ class FirestoreService {
         supporterDisplayName: supporterUser.displayName,
         status: SupporterLinkStatus.pending,
         createdAt: DateTime.now(),
-        permissions: SupporterPermissions.defaultPermissions(),
+        permissions: SupporterPermissions(),
       );
 
       await _db.collection('supporterLinks').add(newLink.toFirestore());
@@ -562,7 +562,7 @@ class FirestoreService {
           status: SupporterLinkStatus.accepted, // 自動的に承認済み
           createdAt: DateTime.now(),
           acceptedAt: DateTime.now(),
-          permissions: SupporterPermissions.defaultPermissions(),
+          permissions: SupporterPermissions(),
         );
         
         await _db.collection('supporterLinks').add(reverseSupporterLink.toFirestore());

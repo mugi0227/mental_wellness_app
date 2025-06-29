@@ -30,24 +30,18 @@ class SupporterLink {
     final data = doc.data() as Map<String, dynamic>;
     return SupporterLink(
       id: doc.id,
-      userId: data['userId'] ?? '',
-      supporterId: data['supporterId'] ?? '',
-      supporterEmail: data['supporterEmail'] ?? '',
-      supporterDisplayName: data['supporterDisplayName'] as String?,
-      status: SupporterLinkStatus.values.firstWhere(
-        (e) => e.name == data['status'],
-        orElse: () => SupporterLinkStatus.pending,
+      userId: data['userId'],
+      supporterId: data['supporterId'],
+      supporterEmail: data['supporterEmail'],
+      supporterDisplayName: data['supporterDisplayName'],
+      status: SupporterLinkStatus.values
+          .firstWhere((e) => e.name == data['status'], orElse: () => SupporterLinkStatus.pending),
+      permissions: SupporterPermissions.fromMap(
+        data['permissions'] ?? SupporterPermissions().toMap(),
       ),
       createdAt: (data['createdAt'] as Timestamp).toDate(),
-      acceptedAt: data['acceptedAt'] != null
-          ? (data['acceptedAt'] as Timestamp).toDate()
-          : null,
-      declinedAt: data['declinedAt'] != null
-          ? (data['declinedAt'] as Timestamp).toDate()
-          : null,
-      permissions: SupporterPermissions.fromMap(
-        data['permissions'] ?? SupporterPermissions.defaultPermissions().toMap(),
-      ),
+      acceptedAt: (data['acceptedAt'] as Timestamp?)?.toDate(),
+      declinedAt: (data['declinedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -102,63 +96,41 @@ enum SupporterLinkStatus {
 
 /// サポーターの権限設定
 class SupporterPermissions {
-  final bool canViewMentalWeather; // ココロの天気予報を見れるか
-  final bool canViewMoodScore; // 気分スコアを見れるか
-  final bool canViewMoodGraph; // 気分グラフを見れるか
-  final bool canReceiveNotifications; // 通知を受け取るか
-  final bool canUseAIChat; // AIチャット相談を使えるか
+  final bool canViewMoodGraph;
+  final bool canReceiveNotifications;
+  final bool canViewMentalHints;
 
   SupporterPermissions({
-    required this.canViewMentalWeather,
-    required this.canViewMoodScore,
-    required this.canViewMoodGraph,
-    required this.canReceiveNotifications,
-    required this.canUseAIChat,
+    this.canViewMoodGraph = false,
+    this.canReceiveNotifications = false,
+    this.canViewMentalHints = false,
   });
 
-  factory SupporterPermissions.defaultPermissions() {
+  factory SupporterPermissions.fromMap(Map<String, dynamic> map) {
     return SupporterPermissions(
-      canViewMentalWeather: true,
-      canViewMoodScore: true,
-      canViewMoodGraph: true,
-      canReceiveNotifications: false,
-      canUseAIChat: true,
-    );
-  }
-
-  factory SupporterPermissions.fromMap(Map<String, dynamic> data) {
-    return SupporterPermissions(
-      canViewMentalWeather: data['canViewMentalWeather'] ?? true,
-      canViewMoodScore: data['canViewMoodScore'] ?? true,
-      canViewMoodGraph: data['canViewMoodGraph'] ?? true,
-      canReceiveNotifications: data['canReceiveNotifications'] ?? false,
-      canUseAIChat: data['canUseAIChat'] ?? true,
+      canViewMoodGraph: map['canViewMoodGraph'] ?? false,
+      canReceiveNotifications: map['canReceiveNotifications'] ?? false,
+      canViewMentalHints: map['canViewMentalHints'] ?? false,
     );
   }
 
   Map<String, dynamic> toMap() {
     return {
-      'canViewMentalWeather': canViewMentalWeather,
-      'canViewMoodScore': canViewMoodScore,
       'canViewMoodGraph': canViewMoodGraph,
       'canReceiveNotifications': canReceiveNotifications,
-      'canUseAIChat': canUseAIChat,
+      'canViewMentalHints': canViewMentalHints,
     };
   }
 
   SupporterPermissions copyWith({
-    bool? canViewMentalWeather,
-    bool? canViewMoodScore,
     bool? canViewMoodGraph,
     bool? canReceiveNotifications,
-    bool? canUseAIChat,
+    bool? canViewMentalHints,
   }) {
     return SupporterPermissions(
-      canViewMentalWeather: canViewMentalWeather ?? this.canViewMentalWeather,
-      canViewMoodScore: canViewMoodScore ?? this.canViewMoodScore,
       canViewMoodGraph: canViewMoodGraph ?? this.canViewMoodGraph,
       canReceiveNotifications: canReceiveNotifications ?? this.canReceiveNotifications,
-      canUseAIChat: canUseAIChat ?? this.canUseAIChat,
+      canViewMentalHints: canViewMentalHints ?? this.canViewMentalHints,
     );
   }
 }

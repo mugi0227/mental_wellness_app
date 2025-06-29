@@ -45,7 +45,7 @@ class _MainScreenState extends State<MainScreen> {
     "気分の変化を一緒に見てるよ♪", // 気分グラフ
     "みんなでサポートしあおうね！", // つながり
     "お薬の時間を忘れずにワン", // お薬
-    "何かお手伝いできることあるワン？", // メニュー
+    "何かお手伝いできることあるワン？", // その他
   ];
 
 
@@ -121,7 +121,7 @@ class _MainScreenState extends State<MainScreen> {
             BottomNavigationBarItem(
               icon: Icon(Icons.apps_outlined),
               activeIcon: Icon(Icons.apps),
-              label: 'メニュー',
+              label: 'その他',
             ),
           ],
           currentIndex: _selectedIndex,

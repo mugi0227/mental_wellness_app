@@ -1,177 +1,129 @@
 require('dotenv').config();
-const functions = require("firebase-functions"); // Added a comment to force redeploy
+const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-const {GoogleGenerativeAI} = require("@google/generative-ai");
-const {AI_PERSONA, buildContextFromDiaryLogs} = require("./aiPersona");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { AI_PERSONA, buildContextFromDiaryLogs } = require("./aiPersona");
+const { defineTools, executeTool } = require("./tools.js");
 
-/**
- * このファイルはFirebase Genkitを使用してCloud Functionを定義します。
- * 必要なパッケージ:
- * npm install firebase-functions firebase-admin genkit @genkit-ai/googleai @genkit-ai/firebase zod
- */
-
-//const { defineFlow, run } = require("genkit");
-//const { onFlow } = require("@genkit-ai/firebase/functions");
-//const { gemini15Flash } = require("@genkit-ai/googleai"); // Genkit推奨のモデルインポート
-//const { z } = require("zod");
-//const admin = require("firebase-admin");
-
-// Genkitの設定ファイルを読み込みます (プロジェクトルートにgenkit.jsがあると仮定)
-//require("./genkit.js");
-
-
-admin.initializeApp();
-const db = admin.firestore();
-
-// Firebase Admin SDKの初期化
-/** 
+// Initialize Firebase Admin
 if (admin.apps.length === 0) {
     admin.initializeApp();
 }
 const db = admin.firestore();
 
-// フローの入力データ型をZodで定義
-const MindForecastInputSchema = z.object({
-    sleepDurationHours: z.number().optional(),
-    currentWeather: z.object({
-        description: z.string().optional(),
-        temperatureCelsius: z.number().optional(),
-        pressurehPa: z.number().optional(),
-    }).optional(),
+// Initialize Google AI
+const googleApiKey = functions.config().google?.api_key || process.env.GOOGLE_API_KEY;
+if (!googleApiKey) {
+  console.error("FATAL ERROR: Google API key is not configured. Please set GOOGLE_API_KEY in .env or Firebase config.");
+}
+const genAI = new GoogleGenerativeAI(googleApiKey);
+
+// Define the tools using the new format
+const { getMedicationInfoTool, getSupporterInfoTool, searchDrugInfoTool } = defineTools();
+
+
+// New Agent-based Empathetic Chat Function
+// =========================================
+exports.getEmpatheticResponse = functions.region("asia-northeast1").https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError("unauthenticated", "The function must be called while authenticated.");
+    }
+    const userId = context.auth.uid;
+    const { userMessage, chatHistory = [] } = data;
+
+    if (!userMessage || typeof userMessage !== "string") {
+        throw new functions.https.HttpsError("invalid-argument", "The 'userMessage' field is required and must be a string.");
+    }
+
+    functions.logger.log(`[Agent] Starting for user: ${userId}, Message: "${userMessage}"`);
+
+    try {
+        let diaryContext = "";
+        try {
+            const recentLogsSnapshot = await db.collection("users").doc(userId).collection("aiDiaryLogs")
+                .orderBy("timestamp", "desc").limit(3).get();
+            if (!recentLogsSnapshot.empty) {
+                const recentLogs = recentLogsSnapshot.docs.map(doc => doc.data());
+                diaryContext = buildContextFromDiaryLogs(recentLogs);
+            }
+        } catch (error) {
+            functions.logger.warn(`[Agent] Failed to fetch recent logs for context:`, error);
+        }
+
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            systemInstruction: `${AI_PERSONA.systemPrompts.empatheticChat}
+
+### 重要な行動ルール
+- ユーザーの質問に答えるために、必要であればためらわずにツール（Function Calling）を積極的に使用してください。
+- **思考プロセスやツールの使用計画を絶対にユーザーに話してはいけません。**
+- ツールを使うと決めたら、まず黙ってツールを実行し、その結果が得られるまで待ってください。
+- そして、ツールから得られた情報だけを使って、最終的な応答を一度で生成してください。
+- ユーザーから「私の薬について教えて」と尋ねられたら、まず getMedicationInfoTool を呼び出し、その結果を使って回答してください。
+- 憶測で答えるのではなく、ツールで得た事実に基づいて応答することが重要です。
+
+${diaryContext}`,
+            tools: [getMedicationInfoTool, getSupporterInfoTool, searchDrugInfoTool],
+        });
+
+        let sanitizedHistory = chatHistory || [];
+        if (sanitizedHistory.length > 0 && sanitizedHistory[0].role === 'model') {
+            sanitizedHistory = sanitizedHistory.slice(1);
+        }
+
+        const generativeChat = model.startChat({
+            history: sanitizedHistory,
+            generationConfig: { temperature: 0.8 },
+        });
+
+        // Start the conversation loop
+        let currentMessage = [{ text: userMessage }];
+        const MAX_LOOPS = 5;
+
+        for (let i = 0; i < MAX_LOOPS; i++) {
+            functions.logger.log(`[Agent Loop ${i + 1}] Sending message to model.`);
+            const result = await generativeChat.sendMessage(currentMessage);
+            const response = result.response;
+            const functionCalls = response.functionCalls();
+
+            if (functionCalls && functionCalls.length > 0) {
+                functions.logger.log(`[Agent Loop ${i + 1}] Function call(s) requested:`, JSON.stringify(functionCalls));
+                
+                const toolExecutionPromises = functionCalls.map(call => executeTool(call, userId));
+                const toolResults = await Promise.all(toolExecutionPromises);
+                functions.logger.log(`[Agent Loop ${i + 1}] Tool execution results:`, JSON.stringify(toolResults));
+
+                currentMessage = toolResults.map(toolResult => ({
+                    functionResponse: {
+                        name: toolResult.toolCall.name,
+                        response: toolResult.result,
+                    }
+                }));
+            } else {
+                const aiResponseText = response.text();
+                functions.logger.log(`[Agent Loop ${i + 1}] Final response from AI:`, aiResponseText);
+                return { aiResponse: aiResponseText };
+            }
+        }
+
+        functions.logger.warn(`[Agent] Reached max loop count for user ${userId}. Returning fallback response.`);
+        return { aiResponse: "うーん、ちょっと考え込んじゃったワン。もう一度、少し違う聞き方で質問してくれる？" };
+
+    } catch (error) {
+        functions.logger.error(`[Agent] Error in getEmpatheticResponse for user ${userId}:`, error);
+        if (error.message && error.message.includes('SAFETY')) {
+             return { aiResponse: "ごめんねワン...そのお話はちょっと難しいみたいだワン。他の話題でお話ししようワン！" };
+        }
+        throw new functions.https.HttpsError("internal", "An error occurred while getting a response.", error.message);
+    }
 });
 
-// フローの出力データ型をZodで定義
-const MindForecastOutputSchema = z.object({
-    text: z.string(),
-    emoji: z.string(),
-    advice: z.string(),
-});*/
+// ALL OTHER EXISTING FUNCTIONS
+// ============================
 
-/**
- * ユーザーの最近の気分ログに基づいて「ココロの天気予報」を生成します。
- * Genkitのフローとして定義され、Firebase Callable Functionとしてデプロイされます。
- */
-/** exports.generateMindForecast = onFlow(
-    {
-        name: "generateMindForecast",
-        inputSchema: MindForecastInputSchema,
-        outputSchema: MindForecastOutputSchema,
-        authPolicy: (auth, input) => {
-            // 認証されていないユーザーからの呼び出しをここで弾きます。
-            if (!auth) {
-                throw new Error("The function must be called while authenticated.");
-            }
-        },
-    },
-    async (data, { auth }) => {
-        console.log("--- generateMindForecast START (Genkit) ---");
+// Note: The original `getEmpatheticResponse` is now replaced by the Genkit flow above.
+// All other functions are preserved below.
 
-        const userId = auth.uid;
-        const { sleepDurationHours, currentWeather } = data;
-        console.log(`generateMindForecast for user: ${userId}`, { sleepDurationHours, currentWeather });
-
-        // 1. Firestoreから直近7件の日記ログを取得
-        const logsSnapshot = await db.collection("users").doc(userId).collection("aiDiaryLogs")
-            .orderBy("timestamp", "desc")
-            .limit(7)
-            .get();
-
-        if (logsSnapshot.empty) {
-            console.log(`No diary logs found for user ${userId} for forecast.`);
-            return {
-                text: "記録がまだありません。日記を書いてみましょう。",
-                emoji: "✏️",
-                advice: "あなたの最初の記録をお待ちしています。"
-            };
-        }
-
-        // 2. AIへのプロンプト用にログを整形
-        const logsForPrompt = [];
-        logsSnapshot.forEach(doc => {
-            const log = doc.data();
-            const logEntry = {
-                date: log.timestamp.toDate().toISOString().split("T")[0],
-                overallMoodScore: log.overallMoodScore !== undefined ? log.overallMoodScore : log.selfReportedMoodScore,
-                diaryTextSnippet: log.diaryText ? log.diaryText.substring(0, 100) : ""
-            };
-            logsForPrompt.push(logEntry);
-        });
-        logsForPrompt.reverse(); // 時系列順（古い→新しい）に並べ替え
-
-        console.log(`Fetched ${logsForPrompt.length} logs for prompt generation.`);
-
-        // 3. プロンプト本体の組み立て
-        const today = new Date().toISOString().split("T")[0]; // 今日の日付（YYYY-MM-DD形式）
-        let promptLogSummary = `今日の日付: ${today}\\n\\n直近の記録：\\n`;
-        logsForPrompt.forEach(log => {
-            promptLogSummary += `日付: ${log.date}, 気分スコア: ${log.overallMoodScore}/5 ${log.diaryTextSnippet ? ", 日記抜粋: 「" + log.diaryTextSnippet + "」" : ""}\\n`;
-        });
-
-        let contextText = "";
-        if (currentWeather && currentWeather.description) {
-            contextText += `今日の天気は「${currentWeather.description}」`;
-            if (currentWeather.temperatureCelsius !== undefined) {
-                contextText += `、気温は約${currentWeather.temperatureCelsius}度`;
-            }
-            if (currentWeather.pressurehPa !== undefined) {
-                contextText += `、気圧は約${currentWeather.pressurehPa}hPa`;
-            }
-            contextText += "です。";
-        }
-        if (sleepDurationHours !== undefined) {
-            contextText += ` 昨晩の睡眠時間は約${sleepDurationHours}時間でした。`;
-        }
-        if (contextText) {
-            promptLogSummary += `\\n現在の状況: ${contextText}\\n`;
-        }
-
-        // ココロンのペルソナを使用
-        const systemPrompt = AI_PERSONA.systemPrompts.mindForecast;
-        const userPrompt = `${promptLogSummary}\\n上記の記録と状況を踏まえ、今日のココロの天気予報とアドバイスをJSON形式で生成してください。`;
-
-        console.log("Generated prompt for mind forecast for user:", userId);
-
-        // 4. Genkitを使ってGeminiモデルを呼び出す
-        const llmResponse = await run("call-gemini-for-forecast", async () => {
-            return await gemini15Flash.generate({
-                system: systemPrompt,
-                prompt: userPrompt,
-                config: {
-                    // AIにJSON形式で出力するように指示
-                    responseMimeType: "application/json",
-                },
-            });
-        });
-
-        // 5. AIからのレスポンスをパースして返す
-        try {
-            const forecastResponse = llmResponse.json();
-            // 返ってきたJSONに必要なキーが含まれているかチェック
-            if (!forecastResponse.text || !forecastResponse.emoji || !forecastResponse.advice) {
-                console.warn("AI response JSON is missing required fields. Response:", llmResponse.text());
-                throw new Error("AI response missing required fields.");
-            }
-            console.log("--- generateMindForecast END (Success) ---");
-            return forecastResponse;
-        } catch (parseError) {
-            console.error("Failed to parse AI response as JSON:", parseError, "Raw response:", llmResponse.text());
-            // パースに失敗した場合は、固定のフォールバックメッセージを返す
-            return {
-                text: "AI応答の解析に失敗しました。",
-                emoji: "⚙️",
-                advice: "開発者にご連絡ください。"
-            };
-        }
-    }
-);
-
-
-
-
-/**
- * 日記更新時に自動実行される分析メッセージ生成関数
- * 要件仕様に基づき、日別・週別・月別の3期間の分析を実行
- */
 exports.generateAnalysisMessages = functions.region("asia-northeast1")
     .firestore.document("users/{userId}/aiDiaryLogs/{logId}")
     .onCreate(async (snap, context) => {
@@ -182,79 +134,55 @@ exports.generateAnalysisMessages = functions.region("asia-northeast1")
     functions.logger.log(`Analysis triggered by new diary log: ${logId} for user: ${userId}`);
 
     try {
-        // 分析開始の状態をFirestoreに保存
         await db.collection('users').doc(userId)
             .collection('analysisMessages').doc('messages')
-            .set({
-                isUpdating: true,
-                lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
+            .set({ isUpdating: true, lastUpdated: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-        functions.logger.log(`Analysis loading state set for user: ${userId}`);
-
-        // 3期間（日別・週別・月別）の分析を並行実行
         const periods = [
             { name: 'daily', days: 30, description: '過去30日間' },
-            { name: 'weekly', days: 84, description: '過去12週間' }, // 12週 = 84日
-            { name: 'monthly', days: 365, description: '過去12ヶ月' } // 12ヶ月 = 365日
+            { name: 'weekly', days: 84, description: '過去12週間' },
+            { name: 'monthly', days: 365, description: '過去12ヶ月' }
         ];
         
-        const analysisPromises = periods.map(period => 
-            generatePeriodAnalysis(userId, period)
-        );
-        
+        const analysisPromises = periods.map(period => generatePeriodAnalysis(userId, period));
         const results = await Promise.allSettled(analysisPromises);
         
-        // 結果を統合してFirestoreに保存
         const analysisMessages = {};
         results.forEach((result, index) => {
             const periodName = periods[index].name;
             if (result.status === 'fulfilled' && result.value) {
                 analysisMessages[`${periodName}Message`] = result.value;
             } else {
-                functions.logger.error(`Failed to generate ${periodName} analysis:`, result.reason);
                 analysisMessages[`${periodName}Message`] = "日記を書いて、あなたのことをもっと教えてね！";
             }
         });
         
-        // 要件仕様のパスに保存: users/{userId}/analysisMessages/messages
         await db.collection("users").doc(userId).collection("analysisMessages").doc("messages").set({
             ...analysisMessages,
             isUpdating: false,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
         
-        functions.logger.log(`Analysis messages saved for user ${userId}:`, analysisMessages);
         functions.logger.log("--- generateAnalysisMessages END (Success) ---");
-        
-        return null; // Firestore trigger function
+        return null;
 
     } catch (error) {
         functions.logger.error(`Error in generateAnalysisMessages for user ${userId}:`, error);
-        
-        // エラー時も最低限のメッセージを保存
-        try {
-            await db.collection("users").doc(userId).collection("analysisMessages").doc("messages").set({
-                dailyMessage: "日記を書いて、あなたのことをもっと教えてね！",
-                weeklyMessage: "日記を書いて、あなたのことをもっと教えてね！",
-                monthlyMessage: "日記を書いて、あなたのことをもっと教えてね！",
-                isUpdating: false,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-        } catch (saveError) {
-            functions.logger.error("Failed to save fallback messages:", saveError);
-        }
-        
+        await db.collection("users").doc(userId).collection("analysisMessages").doc("messages").set({
+            dailyMessage: "日記を書いて、あなたのことをもっと教えてね！",
+            weeklyMessage: "日記を書いて、あなたのことをもっと教えてね！",
+            monthlyMessage: "日記を書いて、あなたのことをもっと教えてね！",
+            isUpdating: false,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
         return null;
     }
 });
 
-// 期間別分析を実行する関数
 async function generatePeriodAnalysis(userId, period) {
     try {
         functions.logger.log(`Generating ${period.name} analysis for user: ${userId}`);
         
-        // 期間に応じたデータ取得
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - period.days);
         
@@ -271,7 +199,6 @@ async function generatePeriodAnalysis(userId, period) {
             return "まだ分析に必要なデータが集まっていません。日記を書いてみましょう！";
         }
         
-        // データを集計
         const logs = [];
         let totalPositive = 0;
         let totalNeutral = 0;
@@ -288,12 +215,10 @@ async function generatePeriodAnalysis(userId, period) {
                 diaryText: data.diaryText || ""
             });
             
-            // 気分分類
             if (moodScore >= 4) totalPositive++;
             else if (moodScore >= 3) totalNeutral++;
             else totalNegative++;
             
-            // キーワード抽出（簡易版）
             if (data.diaryText) {
                 const text = data.diaryText;
                 if (text.includes("嬉しい") || text.includes("楽しい") || text.includes("良い")) keywords.push("楽しい");
@@ -304,7 +229,6 @@ async function generatePeriodAnalysis(userId, period) {
             }
         });
         
-        // 要件仕様のプロンプト構築
         const today = new Date().toISOString().split("T")[0];
         const summary = {
             period: period.description,
@@ -314,22 +238,10 @@ async function generatePeriodAnalysis(userId, period) {
             top_keywords: [...new Set(keywords)].slice(0, 5)
         };
         
-        // ココロンのペルソナ使用
-        const systemPrompt = `${AI_PERSONA.systemPrompts.mindForecast}
-
-重要：応答は100文字以内のテキスト形式のメッセージのみを返してください。JSON形式ではありません。分析期間（「${period.description}」など）を自然に文章に含めてください。`;
+        const systemPrompt = `${AI_PERSONA.systemPrompts.mindForecast}\n\n重要：応答は100文字以内のテキスト形式のメッセージのみを返してください。JSON形式ではありません。分析期間（「${period.description}」など）を自然に文章に含めてください。`;
         
-        const userPrompt = `これは、あるユーザーの${period.description}の日記データです。
-
-データ要約:
-- ポジティブな日: ${summary.positive_days}日
-- 普通の日: ${summary.neutral_days}日
-- ネガティブな日: ${summary.negative_days}日
-- よく出るキーワード: ${summary.top_keywords.join("、")}
-
-このデータから、ユーザーの気分の主な傾向を分析し、ユーザーを励ますような、温かいメッセージを100文字以内で生成してください。分析期間を文章に含めてください。`;
+        const userPrompt = `これは、あるユーザーの${period.description}の日記データです。\n\nデータ要約:\n- ポジティブな日: ${summary.positive_days}日\n- 普通の日: ${summary.neutral_days}日\n- ネガティブな日: ${summary.negative_days}日\n- よく出るキーワード: ${summary.top_keywords.join("、")}\n\nこのデータから、ユーザーの気分の主な傾向を分析し、ユーザーを励ますような、温かいメッセージを100文字以内で生成してください。分析期間を文章に含めてください。`;
         
-        // Gemini API呼び出し
         const googleApiKey = functions.config().google?.api_key || process.env.GOOGLE_API_KEY;
         if (!googleApiKey) {
             throw new Error("Google API key is not configured");
@@ -348,10 +260,7 @@ async function generatePeriodAnalysis(userId, period) {
         const response = result.response;
         if (response?.candidates?.[0]?.content?.parts?.[0]?.text) {
             const message = response.candidates[0].content.parts[0].text.trim();
-            
-            // 100文字制限チェック
             const finalMessage = message.length > 100 ? message.substring(0, 97) + "..." : message;
-            
             functions.logger.log(`Generated ${period.name} message: ${finalMessage}`);
             return finalMessage;
         } else {
@@ -363,7 +272,6 @@ async function generatePeriodAnalysis(userId, period) {
         return "今はココロンがちょっと考え中...また後で覗いてみてワン！";
     }
 }
-
 
 exports.getPartnerChatAdvice = functions.region("asia-northeast1")
     .https.onCall(async (data, context) => {
@@ -510,117 +418,6 @@ exports.suggestSelfCareAction = functions.region("asia-northeast1")
       }
     });
 
-// 薬剤師機能は共感チャット（getEmpatheticResponse）に統合されました
-
-exports.getEmpatheticResponse = functions.region("asia-northeast1")
-    .https.onCall(async (data, context) => {
-      if (!context.auth) {
-        throw new functions.https.HttpsError("unauthenticated", "The function must be called while authenticated.");
-      }
-      const userId = context.auth.uid;
-      const userMessage = data.userMessage;
-      const chatHistory = data.chatHistory || [];
-
-      if (!userMessage || typeof userMessage !== "string" || userMessage.trim() === "") {
-        throw new functions.https.HttpsError("invalid-argument", "User message is required and must be a non-empty string.");
-      }
-      functions.logger.log(`Empathetic response requested by user: ${userId}, Message: \"${userMessage}\"`);
-
-      // ココロンのペルソナを使用
-      let systemPrompt = AI_PERSONA.systemPrompts.empatheticChat;
-      
-      // 薬に関する質問かどうかを判定
-      const medicineKeywords = ["薬", "くすり", "クスリ", "medication", "副作用", "飲み合わせ", "服用", "錠剤", "カプセル"];
-      const isMedicineRelated = medicineKeywords.some(keyword => userMessage.includes(keyword));
-      
-      // 過去の日記を取得して文脈を構築
-      let contextInfo = "";
-      try {
-        const recentLogsSnapshot = await db.collection("users").doc(userId).collection("aiDiaryLogs")
-          .orderBy("timestamp", "desc")
-          .limit(3)
-          .get();
-        
-        if (!recentLogsSnapshot.empty) {
-          const recentLogs = [];
-          recentLogsSnapshot.forEach(doc => {
-            const data = doc.data();
-            if (data.timestamp) {
-              recentLogs.push({
-                date: data.timestamp.toDate().toISOString().split("T")[0],
-                moodScore: data.overallMoodScore || data.selfReportedMoodScore,
-                diaryText: data.diaryText,
-                selectedEvents: data.selectedEvents
-              });
-            }
-          });
-          contextInfo = buildContextFromDiaryLogs(recentLogs);
-        }
-      } catch (error) {
-        functions.logger.warn("Failed to fetch recent logs for context:", error);
-      }
-      
-      // 薬の文脈情報を追加（もし薬関連の質問の場合）
-      let medicationContext = "";
-      if (isMedicineRelated && data.medicationContext) {
-        medicationContext = `\n\nユーザーが服用中の薬: ${data.medicationContext.join("、")}`;
-      }
-
-      functions.logger.log("getEmpatheticResponse - Processing chat history:", JSON.stringify(chatHistory));
-      
-      const contents = [];
-      if (chatHistory && Array.isArray(chatHistory)) {
-        chatHistory.forEach((msg) => {
-          if (msg.role && msg.parts) {
-            contents.push({role: msg.role, parts: msg.parts});
-          }
-        });
-      }
-      // ユーザーメッセージに文脈情報を追加
-      const enrichedMessage = `${userMessage}${contextInfo}${medicationContext}`;
-      contents.push({role: "user", parts: [{text: enrichedMessage}]});
-      
-      functions.logger.log("getEmpatheticResponse - Contents for Vertex AI:", JSON.stringify(contents));
-
-      try {
-        const googleApiKey = functions.config().google?.api_key || process.env.GOOGLE_API_KEY;
-        if (!googleApiKey) {
-          throw new Error("Google AI API key is not configured");
-        }
-        
-        const genAI = new GoogleGenerativeAI(googleApiKey);
-        const generativeModel = genAI.getGenerativeModel({
-          model: "gemini-2.5-flash",
-          systemInstruction: systemPrompt,
-        });
-
-        let aiResponseText = "";
-        try {
-          const resp = await generativeModel.generateContent({contents, generationConfig: {temperature: 0.7}});
-          if (resp?.response?.candidates?.[0]?.content?.parts?.[0]?.text) {
-            aiResponseText = resp.response.candidates[0].content.parts[0].text;
-          } else {
-            functions.logger.warn("Invalid or empty response structure from Google AI for empathetic chat. Full response:", JSON.stringify(resp));
-            throw new Error("AIからの共感応答が無効か空です。");
-          }
-          functions.logger.log("Empathetic response from Google AI:", aiResponseText);
-        } catch (aiError) {
-          functions.logger.error("Error calling Google AI for empathetic chat:", aiError);
-          functions.logger.error("Error details:", {
-            message: aiError.message,
-            stack: aiError.stack,
-            name: aiError.name
-          });
-          aiResponseText = "ごめんねワン...うまく言葉にできないけど、ココロンはずっとそばにいるワン。なでなでするワン。";
-        }
-
-        return {aiResponse: aiResponseText};
-      } catch (error) {
-        functions.logger.error("Error in getEmpatheticResponse function for user", userId, ":", error);
-        return {aiResponse: "ごめんねワン...今ちょっと調子が悪いみたいだワン。でもココロンはここにいるワン！"};
-      }
-    });
-
 exports.getCommunicationAdvice = functions.region("asia-northeast1")
     .https.onCall(async (data, context) => {
       if (!context.auth) {
@@ -631,23 +428,30 @@ exports.getCommunicationAdvice = functions.region("asia-northeast1")
       const partnerQuery = data.partnerQuery;
 
       if (!situation || typeof situation !== "string" || situation.trim() === "") {
-        throw new functions.https.HttpsError("invalid-argument", "Required field \'situation\' is missing or not a non-empty string.");
+        throw new functions.https.HttpsError("invalid-argument", "Required field 'situation' is missing or not a non-empty string.");
       }
       if (partnerQuery && typeof partnerQuery !== "string") {
-        throw new functions.https.HttpsError("invalid-argument", "Optional field \'partnerQuery\' must be a string if provided.");
+        throw new functions.https.HttpsError("invalid-argument", "Optional field 'partnerQuery' must be a string if provided.");
       }
 
       functions.logger.log(`Communication advice requested by partner user: ${userId}`, {situation: situation, query: partnerQuery});
 
-      const systemPrompt = "あなたは、精���疾患を持つ方のパートナーを支援する専門家AIカウンセラーです。ユーザー（パートナー）から提供される「状況」と「具体的な悩みや質問」に基づき、建設的で共感的、かつ実用的なコミュニケーション方法や心構えについてアドバイスをしてください。アドバイスには、具体的な会話例や行動提案をいくつか含めてください。パートナーが、困難な状況でも希望を持ち、前向きに関係性を築いていけるような、温かく実践的なサポートを提供することを心がけてください。専門用語は避け、分かりやすい言葉で説明してください。回答は「アドバイス：」で始まり、その後に本文を続けてください。具体的な会話例や行動提案は「会話例・行動提案：」で始め、各提案を「- 」で箇条書きにしてください。";
+      const systemPrompt = "あなたは、精神疾患を持つ方のパートナーを親身にサポートするAIチャット相談員です。ユーザー（パートナー）からの連続した対話形式での相談に対し、共感的かつ実践的なアドバイスを提供してください。会話の流れを汲み取り、具体的で分かりやすい言葉で、パートナーが前向きになれるような応答を心がけてください。時には具体的な行動を提案したり、気持ちの整理を手伝ったりすることも重要です。ただし、医学的な診断や治療法に関する断定的な指示は避け、必要に応じて専門家への相談を促すことも忘れないでください。あなたの応答は、常に温かく、相手に寄り添うものであるべきです。";
 
-      let userPrompt = `状況：${situation}`;
-      if (partnerQuery && partnerQuery.trim() !== "") {
-        userPrompt += `\\n具体的な悩みや質問：${partnerQuery}`;
-      }
-      userPrompt += `\\n\\n上記の状況と悩みを踏まえて、アドバイスと具体的な会話例・行動提案をください。`;
+      const contents = [];
+      chatHistory.forEach((msg) => {
+        if (msg.role && msg.parts) {
+          contents.push({role: msg.role, parts: msg.parts});
+        }
+      });
+      contents.push({role: "user", parts: [{text: userMessage}]});
 
       try {
+        const googleApiKey = functions.config().google?.api_key || process.env.GOOGLE_API_KEY;
+        if (!googleApiKey) {
+          throw new Error("Google AI API key is not configured");
+        }
+        
         const genAI = new GoogleGenerativeAI(googleApiKey);
         const generativeModel = genAI.getGenerativeModel({model: "gemini-2.5-flash"});
         const request = {
@@ -668,7 +472,7 @@ exports.getCommunicationAdvice = functions.region("asia-northeast1")
         } catch (aiError) {
           functions.logger.error("Error calling Vertex AI for communication advice:", aiError);
           return {
-            adviceText: "申し訳ありません、現在AIによるアドバイスを提供できません。一般的な情報源を参考にするか、専門家にご相���ください。",
+            adviceText: "申し訳ありません、現在AIによるアドバイスを提供できません。一般的な情報源を参考にするか、専門家にご相ください。",
             examplePhrases: [],
           };
         }
@@ -691,7 +495,7 @@ exports.getCommunicationAdvice = functions.region("asia-northeast1")
 
         if (examplesMatch && examplesMatch[1]) {
           const examplesString = examplesMatch[1].trim();
-          examplePhrases = examplesString.split("\\n")
+          examplePhrases = examplesString.split("\n")
               .map((line) => line.trim())
               .filter((line) => line.startsWith("- "))
               .map((line) => line.substring(2).trim())
@@ -711,10 +515,6 @@ exports.getCommunicationAdvice = functions.region("asia-northeast1")
       }
     });
 
-/**
- * Analyzes a new diary log, generates AI insights, and updates the log.
- * Triggered when a new document is created in users/{userId}/aiDiaryLogs/{logId}.
- */
 exports.analyzeAiDiaryLog = functions.region("asia-northeast1")
     .firestore.document("users/{userId}/aiDiaryLogs/{logId}")
     .onCreate(async (snap, context) => {
@@ -740,12 +540,12 @@ exports.analyzeAiDiaryLog = functions.region("asia-northeast1")
         try {
           const googleApiKey = process.env.GOOGLE_API_KEY || functions.config().google?.api_key;
           if (!googleApiKey) {
-            throw new Error("Google API key is not configured");
+            throw new Error("Google AI API key is not configured");
           }
           const genAI = new GoogleGenerativeAI(googleApiKey);
           const generativeModel = genAI.getGenerativeModel({model: "gemini-2.5-flash"});
 
-          const positivityPrompt = `以下の日記の内容を分析し、その感情的なポジティブ度を0.0（非常にネガティブ）から1.0（非常にポジティブ）の間の数値でスコアリングしてください。数値のみを返してください。\\n\\n日記：\\n「${diaryText}」`;
+          const positivityPrompt = `以下の日記の内容を分析し、その感情的なポジティブ度を0.0（非常にネガティブ）から1.0（非常にポジティブ）の間の数値でスコアリングしてください。数値のみを返してください。\n\n日記：\n「${diaryText}」`;
           functions.logger.log("Positivity prompt for Vertex AI:", positivityPrompt);
           try {
             const positivityResp = await generativeModel.generateContent({
@@ -768,7 +568,7 @@ exports.analyzeAiDiaryLog = functions.region("asia-northeast1")
             functions.logger.error("Error getting positivity score from Vertex AI:", e);
           }
 
-          const commentPrompt = `以下の日記の内容を読み、評価や批判をせず、ただユーザーに寄り添い、感情を認めるような短い（50～100字程度）AIからの優しい感想コメントを生成してください。\\n例：「今日はそんなことがあったのですね。つらい気持ちを書き出してくれて��ありがとうございます」\\n\\n日記：\\n「${diaryText}」`;
+          const commentPrompt = `以下の日記の内容を読み、評価や批判をせず、ただユーザーに寄り添い、感情を認めるような短い（50～100字程度）AIからの優しい感想コメントを生成してください。\n例：「今日はそんなことがあったのですね。つらい気持ちを書き出してくれてありがとうございます」\n\n日記：\n「${diaryText}」`;
           functions.logger.log("Comment prompt for Vertex AI:", commentPrompt);
           try {
             const commentResp = await generativeModel.generateContent({
@@ -823,11 +623,6 @@ exports.analyzeAiDiaryLog = functions.region("asia-northeast1")
       return null;
     });
 
-/**
- * Generates personal insights based on a user\'s diary logs over a period.
- * This is an HTTP Callable function for initial development and testing.
- * It can be later triggered by Cloud Scheduler.
- */
 exports.generatePersonalInsight = functions.region("asia-northeast1")
     .https.onCall(async (data, context) => {
       // 1. Authentication Check
@@ -886,48 +681,10 @@ exports.generatePersonalInsight = functions.region("asia-northeast1")
         // 3. Generate AI Prompt
         let logsConcatenated = "";
         diaryLogs.forEach((log) => {
-          logsConcatenated += `- ${log.date} (気分: ${log.moodScore}/5): ${log.diaryText}\\n`;
+          logsConcatenated += `- ${log.date} (気分: ${log.moodScore}/5): ${log.diaryText}\n`;
         });
         
-        const aiPrompt = `あなたはユーザーのメンタルヘルスジャーニーをサポートする、洞察力に優れたAIアシスタントです。
-提供された以下のユーザーの日記ログ（過去約${insightPeriodDays}日分）を分析し、ユーザーが自分自身をより深く理解し、ポジティブな気持ちになれるような「パーソナルな気づき」を生成してください。
-
-# 分析対象の日記ログ:
-${logsConcatenated}
-
-# 指示:
-1.  **気づきの要約 (summaryText):**
-    ログ全体を通して見られるユーザーの気分の傾向、特徴的なパターン、または重要な感情の動きについて、1つか2つの最も重要な「気づき」を、150字以内の優しい言葉で記述してください。
-    例: 「最近の日記からは、自然の中で過ごす時間があなたの心に良い影響を与えているようですね。特に週末にそのような時間を持つと、週明けの気分も安定する傾向が見られるかもしれません。」
-
-2.  **キー観察ポイント (keyObservations):**
-    上記の「気づきの要約」を裏付ける、具体的な観察結果やログからの引用（もしあれば短い引用）を3つ、箇条書きで記述してください。各ポイントは100字以内でお願いします。
-    例:
-    - 「『公園を散歩した』『リフレッシュできた』など、自然に関するポジティブな記述が複数見られます。」
-    - 「週末に気分スコアが平均的に高く、特に日曜日に活動的な日は月曜のスコアも良い傾向があります。」
-    - 「一方で、仕事のプレッシャーを感じた日は、睡眠の質にも影響が出ている可能性が示唆されています。」
-
-3.  **ポジティブなアファメーション (positiveAffirmation):**
-    ユーザーを励まし、自己肯定感を高めるような、70字以内の短い前向きなメッセージを生成してください。
-    例: 「あなたは自分自身の気持ちに正直に向き合っていますね。その一つ一つの感情が、あなたを形作る大切な一部です。」
-
-# 出力形式:
-必ず以下のJSON形式で、キー名も指示通りに返してください。
-{
-  "summaryText": "ここに「気づきの要約」を記述",
-  "keyObservations": [
-    "ここに1つ目の「キー観察ポイント」を記述",
-    "ここに2つ目の「キー観察ポイント」を記述",
-    "ここに3つ目の「キー観察ポイント」を記述"
-  ],
-  "positiveAffirmation": "ここに「ポジティブなアファメーション」を記述"
-}
-
-# 注意事項:
-- 常にユーザーに寄り添い、共感的で、非批判的な言葉を選んでください。
-- 断定的な表現や医学的な診断と誤解されるような表現は避けてください。「～のようです」「～かもしれませんね」「～傾向が見られます」といった、可能性を示唆する言葉遣いを心がけてください。
-- 生成する内容は、ユーザーが提供したログデータのみに基づいてください。
-`;
+        const aiPrompt = `あなたはユーザーのメンタルヘルスジャーニーをサポートする、洞察力に優れたAIアシスタントです。\n提供された以下のユーザーの日記ログ（過去約${insightPeriodDays}日分）を分析し、ユーザーが自分自身をより深く理解し、ポジティブな気持ちになれるような「パーソナルな気づき」を生成してください。\n\n# 分析対象の日記ログ:\n${logsConcatenated}\n\n# 指示:\n1.  **気づきの要約 (summaryText):**\n    ログ全体を通して見られるユーザーの気分の傾向、特徴的なパターン、または重要な感情の動きについて、1つか2つの最も重要な「気づき」を、150字以内の優しい言葉で記述してください。\n    例: 「最近の日記からは、自然の中で過ごす時間があなたの心に良い影響を与えているようですね。特に週末にそのような時間を持つと、週明けの気分も安定する傾向が見られるかもしれません。」\n\n2.  **キー観察ポイント (keyObservations):**\n    上記の「気づきの要約」を裏付ける、具体的な観察結果やログからの引用（もしあれば短い引用）を3つ、箇条書きで記述してください。各ポイントは100字以内でお願いします。\n    例:\n    - 「『公園を散歩した』『リフレッシュできた』など、自然に関するポジティブな記述が複数見られます。」\n    - 「週末に気分スコアが平均的に高く、特に日曜日に活動的な日は月曜のスコアも良い傾向があります。」\n    - 「一方で、仕事のプレッシャーを感じた日は、睡眠の質にも影響が出ている可能性が示唆されています。」\n\n3.  **ポジティブなアファメーション (positiveAffirmation):**\n    ユーザーを励まし、自己肯定感を高めるような、70字以内の短い前向きなメッセージを生成してください。\n    例: 「あなたは自分自身の気持ちに正直に向き合っていますね。その一つ一つの感情が、あなたを形作る大切な一部です。」\n\n# 出力形式:\n必ず以下のJSON形式で、キー名も指示通りに返してください。\n{\n  "summaryText": "ここに「気づきの要約」を記述",\n  "keyObservations": [\n    "ここに1つ目の「キー観察ポイント」を記述",\n    "ここに2つ目の「キー観察ポイント」を記述",\n    "ここに3つ目の「キー観察ポイント」を記述"\n  ],\n  "positiveAffirmation": "ここに「ポジティブなアファメーション」を記述"\n}\n\n# 注意事項:\n- 常にユーザーに寄り添い、共感的で、非批判的な言葉を選んでください。\n- 断定的な表現や医学的な診断と誤解されるような表現は避けてください。「～のようです」「～かもしれませんね」「～傾向が見られます」といった、可能性を示唆する言葉遣いを心がけてください。\n- 生成する内容は、ユーザーが提供したログデータのみに基づいてください。\n`;
         functions.logger.log("Generated AI prompt for personal insight for user:", userId);
 
         // 4. Call Vertex AI (Gemini)
@@ -1010,7 +767,7 @@ ${logsConcatenated}
                 payload: {
                   aps: {
                     sound: "default",
-                    category: "PERSONAL_INSIGHT_CATEGORY", // Ensure this category is handled on iOS
+                    category: "PERSONAL_INSIGHT_CATEGORY", 
                   },
                 },
               },
@@ -1045,20 +802,13 @@ ${logsConcatenated}
       }
     });
 
-/**
- * Sends medication reminders to users via FCM.
- * Triggered by Cloud Scheduler (e.g., every 5 minutes) via a Pub/Sub topic.
- * Function name for Pub/Sub trigger: sendMedicationReminders
- */
 exports.sendMedicationReminders = functions.region("asia-northeast1")
-    .pubsub.topic("medication-reminders") // Ensure this topic exists or is created
+    .pubsub.topic("medication-reminders") 
     .onPublish(async (message) => {
       functions.logger.log("Executing sendMedicationReminders due to Pub/Sub trigger.");
 
-      const now = new Date(); // Current time in UTC on the server
-      // Get current time in minutes since midnight UTC
+      const now = new Date(); 
       const currentMinutesSinceMidnight = now.getUTCHours() * 60 + now.getUTCMinutes();
-      // Define a window for reminders (e.g., medication due in the next 5 minutes)
       const reminderWindowMinutes = 5; 
 
       try {
@@ -1080,7 +830,6 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
             continue;
           }
 
-          // Fetch medications for the user that have reminders enabled
           const medicationsSnapshot = await db
               .collection("users")
               .doc(userId)
@@ -1089,7 +838,6 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
               .get();
 
           if (medicationsSnapshot.empty) {
-            // functions.logger.log(`No medications requiring reminders found for user ${userId}.`);
             continue;
           }
 
@@ -1099,38 +847,35 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
 
             if (!medication.name || !medication.times || !Array.isArray(medication.times) || medication.times.length === 0) {
               functions.logger.warn(`Medication ${medId} for user ${userId} has invalid name or 'times' field. Skipping.`);
-              return; // skip this medication\'s time
+              return; 
             }
 
-            medication.times.forEach((timeStr) => { // timeStr is "HH:mm"
+            medication.times.forEach((timeStr) => { 
               const timeParts = timeStr.split(":");
               if (timeParts.length !== 2) {
-                functions.logger.warn(`Invalid time format \"${timeStr}\" for med ${medId}, user ${userId}. Skipping.`);
-                return; // skip this specific time string
+                functions.logger.warn(`Invalid time format "${timeStr}" for med ${medId}, user ${userId}. Skipping.`);
+                return; 
               }
               const medicationHour = parseInt(timeParts[0], 10);
               const medicationMinute = parseInt(timeParts[1], 10);
 
               if (isNaN(medicationHour) || isNaN(medicationMinute) || medicationHour < 0 || medicationHour > 23 || medicationMinute < 0 || medicationMinute > 59) {
-                functions.logger.warn(`Could not parse time or time out of range \"${timeStr}\" for med ${medId}, user ${userId}. Skipping.`);
-                return; // skip this specific time string
+                functions.logger.warn(`Could not parse time or time out of range "${timeStr}" for med ${medId}, user ${userId}. Skipping.`);
+                return; 
               }
               
               const medicationTimeInMinutesUTC = medicationHour * 60 + medicationMinute;
 
-              // Check if the medication time falls within the reminder window
               if (
                 medicationTimeInMinutesUTC >= currentMinutesSinceMidnight &&
                 medicationTimeInMinutesUTC < currentMinutesSinceMidnight + reminderWindowMinutes
               ) {
                 functions.logger.log(`Medication ${medication.name} (ID: ${medId}) for user ${userId} is due at ${timeStr} (UTC). Current server time (UTC minutes): ${currentMinutesSinceMidnight}, Med time (UTC minutes): ${medicationTimeInMinutesUTC}`);
                 
-                // Construct a precise timestamp for this specific intake today (UTC)
                 const scheduledIntakeDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), medicationHour, medicationMinute, 0, 0));
                 const scheduledIntakeTimestamp = admin.firestore.Timestamp.fromDate(scheduledIntakeDate);
 
                 const p = (async () => {
-                  // Check if a log entry for this specific medication and scheduled time already exists
                   const logsQuery = await db.collection("users").doc(userId).collection("medicationLogs")
                       .where("medicationId", "==", medId)
                       .where("scheduledIntakeTime", "==", scheduledIntakeTimestamp)
@@ -1144,7 +889,6 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
                     logData = logDoc.data();
                   }
 
-                  // If log exists and status is \'taken\' or \'skipped\', or reminderSentAt is already set, don\'t send reminder.
                   if (logData && (logData.status === "taken" || logData.status === "skipped")) {
                     functions.logger.log(`User ${userId} already logged medication ${medication.name} for ${timeStr} as ${logData.status}. No reminder needed.`);
                     return;
@@ -1154,7 +898,6 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
                     return;
                   }
 
-                  // Send FCM Notification
                   const fcmMessage = {
                     notification: {
                       title: `お薬の時間です - ${medication.name}`,
@@ -1189,9 +932,9 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
                     
                     const reminderSentTimestampFirestore = admin.firestore.FieldValue.serverTimestamp();
                     
-                    if (logDoc) { // If log entry exists (but reminder wasn\'t sent and status is not final)
+                    if (logDoc) { 
                        await logDoc.ref.update({ reminderSentAt: reminderSentTimestampFirestore, status: "pending_reminder_sent" });
-                    } else { // Create a new log entry
+                    } else { 
                        await db.collection("users").doc(userId).collection("medicationLogs").add({
                            userId: userId,
                            medicationId: medId,
@@ -1221,7 +964,7 @@ exports.sendMedicationReminders = functions.region("asia-northeast1")
         return null;
       } catch (error) {
         functions.logger.error("Error in sendMedicationReminders function:", error);
-        return null; // Important to return null or a Promise for Pub/Sub functions
+        return null; 
       }
     });
 
@@ -1283,10 +1026,8 @@ exports.generateEmpatheticCommentAndRecord = functions
     if (diaryText && diaryText.trim() !== "") {
       functions.logger.log(`Generating AI comment for diaryText: "${diaryText}"`);
       
-      // ココロンのペルソナを使用
       const systemPrompt = AI_PERSONA.systemPrompts.diaryComment;
       
-      // 過去の日記を取得して文脈を構築（オプション）
       let contextInfo = "";
       try {
         const recentLogsSnapshot = await db.collection("users").doc(userId).collection("aiDiaryLogs")
@@ -1313,20 +1054,9 @@ exports.generateEmpatheticCommentAndRecord = functions
         functions.logger.warn("Failed to fetch recent logs for context:", error);
       }
       
-      const prompt = `
-        以下の日記に対して、ココロン（相棒のワンちゃん）として優しくコメントしてください。
-        ${contextInfo}
-        
-        今日の日記:
-        「${diaryText}」
-        ${selectedEvents && selectedEvents.length > 0 ? `今日したこと: ${selectedEvents.join("、")}` : ""}
-        ${sleepDurationHours ? `睡眠時間: ${sleepDurationHours}時間` : ""}
-
-        ココロンのコメント:
-      `;
+      const prompt = `\n        以下の日記に対して、ココロン（相棒のワンちゃん）として優しくコメントしてください。\n        ${contextInfo}\n        \n        今日の日記:\n        「${diaryText}」\n        ${selectedEvents && selectedEvents.length > 0 ? `今日したこと: ${selectedEvents.join("、")}` : ""}\n        ${sleepDurationHours ? `睡眠時間: ${sleepDurationHours}時間` : ""}\n\n        ココロンのコメント:\n      `;
 
       try {
-        // Vertex AI Clientの初期化 (Function内で都度)
         const googleApiKey = functions.config().google?.api_key || process.env.GOOGLE_API_KEY;
         if (!googleApiKey) {
           throw new Error("Google API key is not configured");
@@ -1367,19 +1097,17 @@ exports.generateEmpatheticCommentAndRecord = functions
       selfReportedMoodScore: selfReportedMoodScore,
       diaryText: diaryText || null, 
       aiComment: aiComment, 
-      selectedEvents: selectedEvents || [], // 選択されたイベントIDの配列を保存
+      selectedEvents: selectedEvents || [], 
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      overallMoodScore: selfReportedMoodScore, // 一旦自己申告スコアを入れておく
-      aiAnalyzedPositivityScore: null, // analyzeAiDiaryLog で設定される想定
+      overallMoodScore: selfReportedMoodScore, 
+      aiAnalyzedPositivityScore: null, 
     };
 
-    // 睡眠時間データを追加
     if (sleepDurationHours !== undefined && sleepDurationHours !== null) {
       newLogEntry.sleepDurationHours = sleepDurationHours;
       functions.logger.log(`Sleep duration recorded: ${sleepDurationHours} hours`);
     }
 
-    // 天気データを追加
     if (weatherData !== undefined && weatherData !== null) {
       newLogEntry.weatherData = weatherData;
       functions.logger.log(`Weather data recorded:`, weatherData);
@@ -1394,21 +1122,14 @@ exports.generateEmpatheticCommentAndRecord = functions
       
       functions.logger.log("Diary log successfully recorded with ID:", docRef.id);
       
-      // バックグラウンドで心のヒントを更新（非同期処理でレスポンスをブロックしない）
       updateMentalHintsInBackground(userId).catch(error => {
         functions.logger.error("Background mental hints update failed:", error);
-        // エラーがあってもメインの処理には影響しない
       });
-      
-      // 注意：分析メッセージはgenerateAnalysisMessages関数（Firestore trigger）で自動更新されるため、
-      // ここでの手動呼び出しは不要です。
       
       return {
         success: true,
         logId: docRef.id,
         aiComment: aiComment,
-        // 保存したドキュメントの内容を返すことも可能
-        // newLog: { ...newLogEntry, timestamp: new Date().toISOString() } // timestampはサーバー側で設定されるので近似値
       };
     } catch (error) {
       functions.logger.error("Error recording diary log to Firestore:", error);
@@ -1429,22 +1150,49 @@ exports.getMentalHints = functions
       );
     }
 
-    const userId = context.auth.uid;
+    const requesterId = context.auth.uid;
+    const targetUserId = data.userId || requesterId;
+
+    // If a supporter is requesting data for another user, verify permissions
+    if (requesterId !== targetUserId) {
+      try {
+        const linkSnapshot = await db.collection('supporterLinks')
+          .where('userId', '==', targetUserId)
+          .where('supporterId', '==', requesterId)
+          .where('status', '==', 'accepted')
+          .limit(1)
+          .get();
+
+        if (linkSnapshot.empty) {
+          throw new functions.https.HttpsError('permission-denied', 'あなたはこのユーザーのサポーターとして登録されていません。');
+        }
+
+        const linkData = linkSnapshot.docs[0].data();
+        if (linkData.permissions?.canViewMentalHints !== true) {
+          throw new functions.https.HttpsError('permission-denied', 'あなたにはこのユーザーの「心のヒント」を閲覧する権限がありません。');
+        }
+      } catch (error) {
+        functions.logger.error(`Permission check failed for requester ${requesterId} on target ${targetUserId}:`, error);
+        if (error instanceof functions.https.HttpsError) {
+          throw error;
+        }
+        throw new functions.https.HttpsError('permission-denied', '権限の確認中にエラーが発生しました。');
+      }
+    }
     
     try {
-      functions.logger.log(`Mental hints requested by user: ${userId}`);
+      functions.logger.log(`Mental hints requested by ${requesterId} for user: ${targetUserId}`);
       
-      // Firestoreから保存済みの心のヒントを取得
       const hintsDoc = await db
         .collection("users")
-        .doc(userId)
+        .doc(targetUserId)
         .collection("mentalHints")
         .doc("current")
         .get();
       
       if (hintsDoc.exists) {
         const hintsData = hintsDoc.data();
-        functions.logger.log(`Retrieved mental hints from Firestore for user ${userId}`);
+        functions.logger.log(`Retrieved mental hints from Firestore for user ${targetUserId}`);
         return {
           hints: hintsData.hints || [],
           message: hintsData.message,
@@ -1453,13 +1201,13 @@ exports.getMentalHints = functions
           updatedAt: hintsData.updatedAt
         };
       } else {
-        // 初回アクセス時は空のヒントを返し、バックグラウンドで更新を開始
-        functions.logger.log(`No mental hints found for user ${userId}, triggering background update`);
+        functions.logger.log(`No mental hints found for user ${targetUserId}, triggering background update`);
         
-        // バックグラウンドで更新（非同期）
-        updateMentalHintsInBackground(userId).catch(error => {
-          functions.logger.error("Background mental hints update failed:", error);
-        });
+        if (requesterId === targetUserId) {
+            updateMentalHintsInBackground(targetUserId).catch(error => {
+              functions.logger.error("Background mental hints update failed:", error);
+            });
+        }
         
         return {
           hints: [],
@@ -1473,7 +1221,7 @@ exports.getMentalHints = functions
       }
       
     } catch (error) {
-      functions.logger.error(`Error in getMentalHints for user ${userId}:`, error);
+      functions.logger.error(`Error in getMentalHints for user ${targetUserId}:`, error);
       throw new functions.https.HttpsError(
         "internal",
         "心のヒントの取得中にエラーが発生しました。",
@@ -1482,22 +1230,16 @@ exports.getMentalHints = functions
     }
   });
 
-// バックグラウンドで心のヒントを更新する関数
 async function updateMentalHintsInBackground(userId) {
   try {
     functions.logger.log(`Background mental hints update started for user: ${userId}`);
     
-    // 心のヒント更新開始の状態をFirestoreに保存
     await db.collection('users').doc(userId)
         .collection('mentalHints').doc('current')
-        .set({
-            isUpdating: true,
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+        .set({ isUpdating: true, lastUpdated: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
     functions.logger.log(`Mental hints loading state set for user: ${userId}`);
     
-    // 過去30日間の日記ログを取得
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
@@ -1511,12 +1253,10 @@ async function updateMentalHintsInBackground(userId) {
     
     if (logsSnapshot.empty) {
       functions.logger.log(`No diary logs found for user ${userId} in the last 30 days`);
-      // 空のヒントデータを保存
       await saveMentalHints(userId, [], "まだ分析に必要なデータが集まっていません。", 0);
       return;
     }
 
-    // データを収集（睡眠・天気データも含む）
     const logs = [];
     logsSnapshot.forEach(doc => {
       const data = doc.data();
@@ -1537,20 +1277,7 @@ async function updateMentalHintsInBackground(userId) {
 
     functions.logger.log(`Found ${logs.length} diary logs for background analysis`);
 
-    // ココロンのペルソナを使用
-    const systemPrompt = AI_PERSONA.systemPrompts.mentalHints + `
-
-分析結果は以下のJSON形式で最大5つのヒントを返してください：
-{
-  "hints": [
-    {
-      "title": "ヒントのタイトル（例：お散歩と気分の関係だワン）",
-      "content": "具体的な内容（例：お散歩した日は気分スコアが平均で+1.5ポイント高いみたいだワン！）",
-      "icon": "関連する絵文字1つ",
-      "type": "positive/warning/neutral"
-    }
-  ]
-}`;
+    const systemPrompt = AI_PERSONA.systemPrompts.mentalHints + `\n\n分析結果は以下のJSON形式で最大5つのヒントを返してください：\n{\n  "hints": [\n    {\n      "title": "ヒントのタイトル（例：お散歩と気分の関係だワン）",\n      "content": "具体的な内容（例：お散歩した日は気分スコアが平均で+1.5ポイント高いみたいだワン！）",\n      "icon": "関連する絵文字1つ",\n      "type": "positive/warning/neutral"\n    }\n  ]\n}`;
 
     const dataForAnalysis = logs.map(log => ({
       date: log.date.toISOString().split('T')[0],
@@ -1561,26 +1288,8 @@ async function updateMentalHintsInBackground(userId) {
       weather: log.weather
     }));
 
-    const prompt = `以下のユーザーの日記データを分析し、行動・睡眠・天気と気分の関係についての具体的なヒントを生成してください。
+    const prompt = `以下のユーザーの日記データを分析し、行動・睡眠・天気と気分の関係についての具体的なヒントを生成してください。\n\nデータ：\n${JSON.stringify(dataForAnalysis, null, 2)}\n\n注意事項：\n- イベント名は日本語で記載されています\n- 気分スコアは1（最低）から5（最高）の5段階評価です\n- sleepHours は睡眠時間（時間単位、null の場合はデータなし）\n- weather は天気データ（null の場合はデータなし）\n- 統計的に有意な傾向や繰り返しパターンを見つけてください\n- 睡眠時間、天気条件、行動の組み合わせによる気分への影響を分析してください\n- ユーザーが実際に生活習慣を改善できるような具体的なアドバイスを含めてください\n- 活動や行動を言及する時は必ず日本語で表現してください（例：「よく眠れた日」「散歩」「運動」など）\n- 英語のイベント名（good_sleep, exerciseなど）は使用しないでください\n- 文章はシンプルで分かりやすく、読みやすいものにしてください\n- 「しっぽブンブン」「ワンワン」などの過度な犬の表現は控えめにしてください\n- データに基づいた客観的な分析結果を中心に伝えてください`;
 
-データ：
-${JSON.stringify(dataForAnalysis, null, 2)}
-
-注意事項：
-- イベント名は日本語で記載されています
-- 気分スコアは1（最低）から5（最高）の5段階評価です
-- sleepHours は睡眠時間（時間単位、null の場合はデータなし）
-- weather は天気データ（null の場合はデータなし）
-- 統計的に有意な傾向や繰り返しパターンを見つけてください
-- 睡眠時間、天気条件、行動の組み合わせによる気分への影響を分析してください
-- ユーザーが実際に生活習慣を改善できるような具体的なアドバイスを含めてください
-- 活動や行動を言及する時は必ず日本語で表現してください（例：「よく眠れた日」「散歩」「運動」など）
-- 英語のイベント名（good_sleep, exerciseなど）は使用しないでください
-- 文章はシンプルで分かりやすく、読みやすいものにしてください
-- 「しっぽブンブン」「ワンワン」などの過度な犬の表現は控えめにしてください
-- データに基づいた客観的な分析結果を中心に伝えてください`;
-
-    // Google AI Gemini APIを呼び出し
     const googleApiKey = process.env.GOOGLE_API_KEY || functions.config().google?.api_key;
     if (!googleApiKey) {
       throw new Error("Google AI API key is not configured");
@@ -1604,13 +1313,11 @@ ${JSON.stringify(dataForAnalysis, null, 2)}
       functions.logger.log("Raw AI response for background mental hints:", rawResponse);
       
       try {
-        // レスポンスからJSON部分を抽出
         let jsonString = '';
         const jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
         if (jsonMatch) {
           jsonString = jsonMatch[1].trim();
         } else {
-          // ```json```が見つからない場合は、{で始まる部分を探す
           const jsonStartIndex = rawResponse.indexOf('{');
           const jsonEndIndex = rawResponse.lastIndexOf('}');
           if (jsonStartIndex !== -1 && jsonEndIndex !== -1 && jsonEndIndex > jsonStartIndex) {
@@ -1638,7 +1345,6 @@ ${JSON.stringify(dataForAnalysis, null, 2)}
       }
     }
 
-    // Firestoreに保存
     await saveMentalHints(userId, hints, null, logs.length);
     
     functions.logger.log(`Background mental hints update completed for user: ${userId}`);
@@ -1646,7 +1352,6 @@ ${JSON.stringify(dataForAnalysis, null, 2)}
   } catch (error) {
     functions.logger.error(`Error in background mental hints update for user ${userId}:`, error);
     
-    // エラー時のフォールバック処理：最低限のヒントをFirestoreに保存
     try {
       const fallbackHints = [{
         title: "データ分析エラー",
@@ -1662,12 +1367,10 @@ ${JSON.stringify(dataForAnalysis, null, 2)}
       functions.logger.error(`Failed to save fallback mental hints for user ${userId}:`, fallbackError);
     }
     
-    // エラーを再スローしないことで、呼び出し元の処理を続行
     return;
   }
 }
 
-// 心のヒントをFirestoreに保存する関数
 async function saveMentalHints(userId, hints, message, totalLogs) {
   const hintsData = {
     hints: hints,
@@ -1682,13 +1385,57 @@ async function saveMentalHints(userId, hints, message, totalLogs) {
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   };
 
-  // ユーザーの心のヒントドキュメントを上書き保存（1つのドキュメントで管理）
   await db
     .collection("users")
     .doc(userId)
     .collection("mentalHints")
     .doc("current")
-    .set(hintsData, { merge: false }); // 完全上書き
+    .set(hintsData, { merge: false }); 
 
   functions.logger.log(`Mental hints saved for user ${userId}`);
 }
+
+exports.onUserDeleted = functions.auth.user().onDelete(async (user) => {
+  const userId = user.uid;
+  functions.logger.log(`User account deleted, cleaning up data for user: ${userId}`);
+
+  const userDocRef = db.collection("users").doc(userId);
+
+  const batch = db.batch();
+
+  async function deleteCollection(collectionRef, batch) {
+    const snapshot = await collectionRef.get();
+    if (snapshot.size === 0) {
+      return;
+    }
+    snapshot.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+  }
+
+  const subcollections = [
+    "aiDiaryLogs",
+    "analysisMessages",
+    "medicationLogs",
+    "medications",
+    "personalInsights",
+    "selfCareSuggestions",
+    "supporterLinks",
+    "supporterInvitations",
+    "mentalHints"
+  ];
+
+  for (const subcollection of subcollections) {
+    const collectionRef = userDocRef.collection(subcollection);
+    await deleteCollection(collectionRef, batch);
+  }
+
+  batch.delete(userDocRef);
+
+  try {
+    await batch.commit();
+    functions.logger.log(`Successfully cleaned up all data for deleted user: ${userId}`);
+  } catch (error) {
+    functions.logger.error(`Error cleaning up data for deleted user ${userId}:`, error);
+  }
+});

@@ -182,7 +182,7 @@ class _MedicationAddEditScreenState extends State<MedicationAddEditScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('エラーが���生しました: $e')),
+        SnackBar(content: Text('エラーが発生しました: $e')),
       );
     } finally {
       if (mounted) {
@@ -318,7 +318,7 @@ class _MedicationAddEditScreenState extends State<MedicationAddEditScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(_startDate == null ? '��始日 (任意)' : '開始日: ${DateFormat('yyyy/MM/dd').format(_startDate!)}'),
+                          child: Text(_startDate == null ? '開始日 (任意)' : '開始日: ${DateFormat('yyyy/MM/dd').format(_startDate!)}'),
                         ),
                         TextButton(
                           onPressed: () => _pickDate(context, true),

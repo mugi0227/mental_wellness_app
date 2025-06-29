@@ -9,6 +9,7 @@ import 'package:mental_wellness_app/screens/supporter_invitations_screen.dart';
 import 'package:mental_wellness_app/screens/supporter_management_screen.dart';
 import 'package:mental_wellness_app/features/partner_specific/ai_comm_soudan/presentation/screens/partner_ai_chat_screen.dart';
 import 'package:mental_wellness_app/features/user_specific/mood_graph/presentation/screens/mood_graph_screen.dart';
+import 'package:mental_wellness_app/features/user_specific/mental_hints/screens/mental_hints_screen.dart';
 import 'package:mental_wellness_app/core/theme/app_theme.dart';
 
 class CommunicationHubScreenV3 extends StatefulWidget {
@@ -418,17 +419,6 @@ class _CommunicationHubScreenV3State extends State<CommunicationHubScreenV3> {
           children: [
             if (info.isSupporting) ...[
               ListTile(
-                leading: const Icon(Icons.mood),
-                title: const Text('気分スコアを見る'),
-                enabled: link.permissions.canViewMoodScore,
-                onTap: link.permissions.canViewMoodScore
-                    ? () {
-                        Navigator.pop(context);
-                        _viewMoodScore(link.userId);
-                      }
-                    : null,
-              ),
-              ListTile(
                 leading: const Icon(Icons.show_chart),
                 title: const Text('気分グラフを見る'),
                 enabled: link.permissions.canViewMoodGraph,
@@ -448,34 +438,24 @@ class _CommunicationHubScreenV3State extends State<CommunicationHubScreenV3> {
                     : null,
               ),
               ListTile(
-                leading: const Icon(Icons.wb_sunny_outlined),
-                title: const Text('ココロの天気予報を見る'),
-                enabled: link.permissions.canViewMentalWeather,
-                onTap: link.permissions.canViewMentalWeather
+                leading: const Icon(Icons.lightbulb_outline),
+                title: const Text('心のヒントを見る'),
+                enabled: link.permissions.canViewMentalHints,
+                onTap: link.permissions.canViewMentalHints
                     ? () {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('ココロの天気予報は開発中です')),
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => MentalHintsScreen(
+                              userId: link.userId,
+                            ),
+                          ),
                         );
                       }
                     : null,
               ),
             ],
-            ListTile(
-              leading: const Icon(Icons.chat_bubble_outline),
-              title: const Text('AI相談を開く'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => PartnerAiChatScreen(
-                      supportedUserId: info.userId,
-                    ),
-                  ),
-                );
-              },
-            ),
           ],
         ),
       ),

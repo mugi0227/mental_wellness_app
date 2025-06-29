@@ -287,11 +287,14 @@ class CloudFunctionService {
 
   /// Calls the 'getMentalHints' Cloud Function.
   ///
+  /// [userId] Optional. If provided, fetches hints for that user. Otherwise, fetches for the authenticated user.
   /// Returns a Map containing the hints data (hints array, analyzedPeriod, totalLogs).
-  Future<Map<String, dynamic>> getMentalHints() async {
+  Future<Map<String, dynamic>> getMentalHints({String? userId}) async {
     final HttpsCallable callable = _functions.httpsCallable('getMentalHints');
     try {
-      final HttpsCallableResult result = await callable.call();
+      final HttpsCallableResult result = await callable.call(
+        userId != null ? {'userId': userId} : null,
+      );
       if (result.data is Map<String, dynamic>) {
         return result.data as Map<String, dynamic>;
       } else {

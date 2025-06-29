@@ -3,11 +3,40 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:mental_wellness_app/core/theme/app_theme.dart';
 import 'package:mental_wellness_app/screens/partner_link_screen.dart';
 import 'package:mental_wellness_app/screens/supporter_management_screen.dart';
+import 'package:mental_wellness_app/screens/account_settings_screen.dart';
 import 'package:mental_wellness_app/features/settings/presentation/screens/permissions_settings_screen.dart';
+import 'package:mental_wellness_app/services/firestore_service.dart';
+import 'package:mental_wellness_app/models/user_model.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-class OtherOptionsScreen extends StatelessWidget {
+class OtherOptionsScreen extends StatefulWidget {
   const OtherOptionsScreen({super.key});
+
+  @override
+  State<OtherOptionsScreen> createState() => _OtherOptionsScreenState();
+}
+
+class _OtherOptionsScreenState extends State<OtherOptionsScreen> {
+  final _firestoreService = FirestoreService();
+  UserProfile? _userProfile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserProfile();
+  }
+
+  Future<void> _loadUserProfile() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final profile = await _firestoreService.getUserProfile(user.uid);
+      if (mounted) {
+        setState(() {
+          _userProfile = profile;
+        });
+      }
+    }
+  }
 
   Future<void> _launchURL(String url) async {
     final Uri uri = Uri.parse(url);
@@ -67,12 +96,13 @@ class OtherOptionsScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
       appBar: AppBar(
-        title: const Text('メニュー'),
+        title: const Text('その他'),
         backgroundColor: Colors.white,
         foregroundColor: AppTheme.primaryColor,
         elevation: 0,
       ),
       body: ListView(
+        padding: const EdgeInsets.only(bottom: 120), // ココロン用のスペースを確保
         children: [
           // ユーザー情報セクション
           Container(
@@ -95,17 +125,17 @@ class OtherOptionsScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        user?.email ?? 'ゲストユーザー',
+                        _userProfile?.displayName ?? user?.email?.split('@')[0] ?? 'ゲストユーザー',
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 18,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'UID: ${user?.uid.substring(0, 8) ?? '---'}',
+                        user?.email ?? '',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 14,
                           color: AppTheme.textSecondaryColor,
                         ),
                       ),
@@ -138,7 +168,16 @@ class OtherOptionsScreen extends StatelessWidget {
                 icon: Icons.account_circle,
                 title: 'アカウント設定',
                 subtitle: 'プロフィールの編集',
-                onTap: () => _showComingSoonDialog(context, 'アカウント設定'),
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const AccountSettingsScreen(),
+                    ),
+                  );
+                  // 画面から戻ってきたらプロフィールを再読み込み
+                  _loadUserProfile();
+                },
               ),
               _MenuItem(
                 icon: Icons.notifications,

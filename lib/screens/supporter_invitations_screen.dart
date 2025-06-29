@@ -253,24 +253,14 @@ class _InvitationCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   _FeatureItem(
-                    icon: Icons.wb_sunny_outlined,
-                    text: 'ココロの天気予報（抽象化された心の状態）',
-                    enabled: invitation.permissions.canViewMentalWeather,
-                  ),
-                  _FeatureItem(
-                    icon: Icons.mood,
-                    text: '気分スコア（1-5の数値）',
-                    enabled: invitation.permissions.canViewMoodScore,
-                  ),
-                  _FeatureItem(
                     icon: Icons.show_chart,
                     text: '気分グラフ（推移の可視化）',
                     enabled: invitation.permissions.canViewMoodGraph,
                   ),
                   _FeatureItem(
-                    icon: Icons.chat_bubble_outline,
-                    text: 'AIチャット相談（サポート方法のアドバイス）',
-                    enabled: invitation.permissions.canUseAIChat,
+                    icon: Icons.lightbulb_outline,
+                    text: '心のヒント（AIによる分析）',
+                    enabled: invitation.permissions.canViewMentalHints,
                   ),
                   _FeatureItem(
                     icon: Icons.notifications_outlined,

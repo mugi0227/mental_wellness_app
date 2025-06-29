@@ -382,25 +382,15 @@ class _SupporterCard extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  if (supporter.permissions.canViewMentalWeather)
-                    _PermissionChip(
-                      icon: Icons.wb_sunny_outlined,
-                      label: 'ココロの天気',
-                    ),
-                  if (supporter.permissions.canViewMoodScore)
-                    _PermissionChip(
-                      icon: Icons.mood,
-                      label: '気分スコア',
-                    ),
                   if (supporter.permissions.canViewMoodGraph)
                     _PermissionChip(
                       icon: Icons.show_chart,
                       label: '気分グラフ',
                     ),
-                  if (supporter.permissions.canUseAIChat)
+                  if (supporter.permissions.canViewMentalHints)
                     _PermissionChip(
-                      icon: Icons.chat_bubble_outline,
-                      label: 'AI相談',
+                      icon: Icons.lightbulb_outline,
+                      label: '心のヒント',
                     ),
                   if (supporter.permissions.canReceiveNotifications)
                     _PermissionChip(
@@ -569,30 +559,6 @@ class _PermissionSettingsDialogState extends State<_PermissionSettingsDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             SwitchListTile(
-              title: const Text('ココロの天気予報'),
-              subtitle: const Text('心の状態を天気で表現した情報'),
-              value: _permissions.canViewMentalWeather,
-              onChanged: (value) {
-                setState(() {
-                  _permissions = _permissions.copyWith(
-                    canViewMentalWeather: value,
-                  );
-                });
-              },
-            ),
-            SwitchListTile(
-              title: const Text('気分スコア'),
-              subtitle: const Text('日々の気分スコア（1-5）を表示'),
-              value: _permissions.canViewMoodScore,
-              onChanged: (value) {
-                setState(() {
-                  _permissions = _permissions.copyWith(
-                    canViewMoodScore: value,
-                  );
-                });
-              },
-            ),
-            SwitchListTile(
               title: const Text('気分グラフ'),
               subtitle: const Text('気分の推移をグラフで可視化'),
               value: _permissions.canViewMoodGraph,
@@ -605,13 +571,13 @@ class _PermissionSettingsDialogState extends State<_PermissionSettingsDialog> {
               },
             ),
             SwitchListTile(
-              title: const Text('AI相談機能'),
-              subtitle: const Text('サポーター向けAIチャット相談'),
-              value: _permissions.canUseAIChat,
+              title: const Text('心のヒントを見る'),
+              subtitle: const Text('AIが分析した心の傾向やヒント'),
+              value: _permissions.canViewMentalHints,
               onChanged: (value) {
                 setState(() {
                   _permissions = _permissions.copyWith(
-                    canUseAIChat: value,
+                    canViewMentalHints: value,
                   );
                 });
               },
