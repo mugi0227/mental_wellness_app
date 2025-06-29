@@ -107,15 +107,10 @@ linux/flutter/ephemeral/
 windows/flutter/ephemeral/
 
 # Claude Code関連
-CLAUDE.md
 .claude/
-aiPersona改善案.md
-How_to_test_on_iPhone.md
-ココロの天気現状.md
-ココロの天気要件.md
-現状解析.md
-実装完了サマリー.md
-進捗.md
+# すべての.mdファイル（README.md以外）
+*.md
+!README.md
 
 # バックアップファイル
 *.backup

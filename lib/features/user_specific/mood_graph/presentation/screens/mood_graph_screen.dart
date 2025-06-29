@@ -7,6 +7,7 @@ import 'package:mental_wellness_app/models/ai_diary_log_model.dart';
 import 'package:mental_wellness_app/services/firestore_service.dart';
 import 'package:collection/collection.dart'; // For groupBy
 import 'package:mental_wellness_app/features/user_specific/ai_diary_log/presentation/screens/ai_diary_log_detail_screen.dart';
+import 'package:mental_wellness_app/features/user_specific/mental_hints/screens/mental_hints_screen.dart';
 import 'package:mental_wellness_app/core/theme/app_theme.dart';
 // import 'package:mental_wellness_app/services/cloud_function_service.dart'; // 現在未使用
 
@@ -329,158 +330,76 @@ class _MoodGraphScreenState extends State<MoodGraphScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ココロンの吹き出し用のStreamBuilderを実行（非表示だが機能は維持）
+    if (!widget.isViewOnly && widget.userId == null && widget.onForecastMessageChanged != null) {
+      _getAnalysisMessagesStream().listen((snapshot) {
+        final data = snapshot.exists ? snapshot.data() as Map<String, dynamic>? : null;
+        final isUpdating = data?['isUpdating'] as bool? ?? false;
+        widget.onForecastMessageChanged!(getAnalysisMessage(snapshot, isUpdating: isUpdating));
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('気分グラフ'),
         actions: [
-          PopupMenuButton<String>(
-            initialValue: _selectedPeriod,
-            onSelected: (String value) {
-              if (_selectedPeriod != value) {
-                setState(() {
-                  _selectedPeriod = value;
-                  _fetchAndProcessMoodLogs();
-                });
-              }
-            },
-            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-              const PopupMenuItem<String>(value: '日別', child: Text('日別 (直近30日)')),
-              const PopupMenuItem<String>(value: '週別', child: Text('週別 (直近12週)')),
-              const PopupMenuItem<String>(value: '月別', child: Text('月別 (直近12ヶ月)')),
-            ],
-            icon: const Icon(Icons.filter_list),
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            child: PopupMenuButton<String>(
+              initialValue: _selectedPeriod,
+              onSelected: (String value) {
+                if (_selectedPeriod != value) {
+                  setState(() {
+                    _selectedPeriod = value;
+                    _fetchAndProcessMoodLogs();
+                  });
+                }
+              },
+              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                const PopupMenuItem<String>(value: '日別', child: Text('日別 (直近30日)')),
+                const PopupMenuItem<String>(value: '週別', child: Text('週別 (直近12週)')),
+                const PopupMenuItem<String>(value: '月別', child: Text('月別 (直近12ヶ月)')),
+              ],
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: AppTheme.primaryColor.withValues(alpha: 0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _selectedPeriod,
+                      style: TextStyle(
+                        color: AppTheme.primaryColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: AppTheme.primaryColor,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // 分析メッセージ部分（自分のグラフを表示する場合のみ）
-          if (!widget.isViewOnly && widget.userId == null)
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.all(16),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: AppTheme.primaryColor.withValues(alpha: 0.3),
-                  width: 1,
-                ),
-              ),
-              child: StreamBuilder<DocumentSnapshot>(
-                stream: _getAnalysisMessagesStream(),
-                builder: (context, snapshot) {
-                  // エラーハンドリング
-                  if (snapshot.hasError) {
-                    return Row(
-                      children: [
-                        Icon(
-                          Icons.error_outline,
-                          color: Colors.red,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'メッセージの読み込みでエラーが発生しました😢',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.red[700],
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-
-                  // 接続状態のチェック
-                  if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
-                    return Row(
-                      children: [
-                        SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'ココロンが準備中だワン...🐕',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: AppTheme.textSecondaryColor,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-
-                  // isUpdatingフィールドをチェック
-                  final data = snapshot.data?.exists == true ? snapshot.data!.data() as Map<String, dynamic>? : null;
-                  final isUpdating = data?['isUpdating'] as bool? ?? false;
-
-                  // コールバックでメッセージ変更を通知
-                  if (widget.onForecastMessageChanged != null) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      widget.onForecastMessageChanged!(getAnalysisMessage(snapshot.data, isUpdating: isUpdating));
-                    });
-                  }
-
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isUpdating 
-                              ? Colors.orange.withValues(alpha: 0.2)
-                              : AppTheme.primaryColor.withValues(alpha: 0.2),
-                          shape: BoxShape.circle,
-                        ),
-                        child: isUpdating
-                            ? SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.orange[700]!),
-                                ),
-                              )
-                            : Icon(
-                                Icons.pets,
-                                size: 16,
-                                color: AppTheme.primaryColor,
-                              ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          getAnalysisMessage(snapshot.data, isUpdating: isUpdating),
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isUpdating 
-                                ? Colors.orange[700]
-                                : AppTheme.textPrimaryColor,
-                            fontWeight: FontWeight.w500,
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          
-          // グラフ部分
-          Expanded(
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            // グラフ部分
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.6, // 画面の60%の高さに縮小
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _chartSpots.isEmpty
@@ -819,8 +738,103 @@ class _MoodGraphScreenState extends State<MoodGraphScreen> {
                           ],
                         ),
                       ),
-          ),
-        ],
+            ),
+            
+            // 心のヒントへの遷移ボタン
+            if (!widget.isViewOnly && widget.userId == null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppTheme.primaryColor.withValues(alpha: 0.1),
+                        AppTheme.secondaryColor.withValues(alpha: 0.1),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: AppTheme.primaryColor.withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const MentalHintsScreen(),
+                          ),
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Column(
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryColor.withValues(alpha: 0.2),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    Icons.lightbulb_outline,
+                                    color: AppTheme.primaryColor,
+                                    size: 24,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '心のヒント',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppTheme.textPrimaryColor,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'あなたの気分パターンから\nココロンが見つけたヒントを確認',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: AppTheme.textSecondaryColor,
+                                          height: 1.3,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.arrow_forward_ios,
+                                  color: AppTheme.primaryColor.withValues(alpha: 0.7),
+                                  size: 20,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            
+            // 下部にスクロール用のスペースを追加
+            const SizedBox(height: 200),
+          ],
+        ),
       ),
     );
   }

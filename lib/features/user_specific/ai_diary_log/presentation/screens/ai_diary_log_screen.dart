@@ -444,35 +444,32 @@ class _AiDiaryLogScreenState extends State<AiDiaryLogScreen> {
         elevation: 0,
         foregroundColor: AppTheme.primaryColor,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.calendar_today, size: 22),
-            tooltip: 'カレンダー',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const CalendarScreen()),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.monitor_heart_outlined, size: 22),
-            tooltip: 'ヘルスデータ',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const HealthDataScreen()),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.lightbulb_outline, size: 22),
-            tooltip: '心のヒント',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const MentalHintsScreen()),
-              );
-            },
+          // カレンダーボタンをわかりやすくアップデート
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            child: ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const CalendarScreen()),
+                );
+              },
+              icon: const Icon(Icons.calendar_today, size: 18),
+              label: const Text('カレンダー'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.1),
+                foregroundColor: AppTheme.primaryColor,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: BorderSide(
+                    color: AppTheme.primaryColor.withValues(alpha: 0.3),
+                    width: 1,
+                  ),
+                ),
+              ),
+            ),
           ),
         ],
       ),
