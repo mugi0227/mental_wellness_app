@@ -1,0 +1,110 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId} {
+      // 自分のプロファイルは読み書き可能
+      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+      // UserProfileモデルに基づいて更新
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // メールアドレスでの検索を許可（サポーター招待のため）
+      allow read: if request.auth != null;
+
+      // aiDiaryLogs (旧 moodLogs) のルール
+      // AiDiaryLogモデルに必要なフィールド: userId, selfReportedMoodScore, diaryText, timestamp
+      match /aiDiaryLogs/{logId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null &&
+                       request.auth.uid == userId &&
+                       request.resource.data.userId == userId &&
+                       request.resource.data.keys().hasAll(['userId', 'selfReportedMoodScore', 'diaryText', 'timestamp']);
+        // AiDiaryLogの更新は現在アプリで実装されていない想定だが、基本的なルールは設定
+        allow update: if request.auth != null && request.auth.uid == userId && resource.data.userId == userId;
+        // AiDiaryLogの削除は現在アプリで実装されていない想定だが、基本的なルールは設定
+        allow delete: if request.auth != null && request.auth.uid == userId && resource.data.userId == userId;
+      }
+
+      match /analysisMessages/{messageId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /forecasts/{forecastId} { // forecastId is typically 'latest'
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /selfCareSuggestions/{suggestionId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /medications/{medicationId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId && request.resource.data.userId == userId;
+        allow update, delete: if request.auth != null && request.auth.uid == userId && resource.data.userId == userId;
+      }
+
+      match /medicationLogs/{logId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId && request.resource.data.userId == userId;
+        allow update, delete: if request.auth != null && request.auth.uid == userId && resource.data.userId == userId;
+      }
+
+      match /personalInsights/{insightId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /sleepLogs/{logId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId && request.resource.data.userId == userId;
+        allow update, delete: if request.auth != null && request.auth.uid == userId && resource.data.userId == userId;
+      }
+
+      match /mentalHints/{hintId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null && request.auth.uid == userId;
+      }
+
+      match /mindForecast/{forecastId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    match /partner_data/{dataId} {
+        allow read, write: if request.auth != null; // TODO: より具体的なルールが必要
+    }
+
+    match /shared_info/{infoId} {
+        allow read, write: if request.auth != null; // TODO: より具体的なルールが必要
+    }
+
+    // サポーター連携関連のルール
+    match /supporterLinks/{linkId} {
+      // 読み取り: 自分が当事者またはサポーターの場合
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.userId || 
+         request.auth.uid == resource.data.supporterId);
+      
+      // 作成: 認証済みユーザーかつ、自分が当事者として設定されている場合
+      allow create: if request.auth != null && 
+        request.auth.uid == request.resource.data.userId &&
+        request.resource.data.keys().hasAll(['userId', 'supporterId', 'supporterEmail', 'status', 'createdAt', 'permissions']);
+      
+      // 更新: 自分が当事者またはサポーターの場合（権限更新、承認、拒否など）
+      allow update: if request.auth != null && 
+        (request.auth.uid == resource.data.userId || 
+         request.auth.uid == resource.data.supporterId);
+      
+      // 削除: 自分が当事者の場合のみ
+      allow delete: if request.auth != null && 
+        request.auth.uid == resource.data.userId;
+    }
+
+
+    // ルートレベルでの包括的な拒否ルールは、すべての個別パスルールが正しく設定されるまでコメントアウト推奨
+    // match /{document=**} {
+    //   allow read, write: if false;
+    // }
+  }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="medication_reminder_channel_id">medication_reminders_channel</string>
+    <string name="medication_reminder_channel_name">Medication Reminders</string>
+    <string name="medication_reminder_channel_description">Channel for medication reminder notifications</string>
+</resources>

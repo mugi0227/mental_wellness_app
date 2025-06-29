@@ -1,0 +1,128 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# === 追加項目 ===
+
+# 環境変数ファイル（秘密情報を含む）
+.env
+.env.*
+!.env.example
+functions/.env
+functions/.env.*
+
+# Firebase秘密情報
+**/google-services.json
+**/GoogleService-Info.plist
+firebase-service-account*.json
+service-account*.json
+*.pem
+*.key
+
+# Cloud Functions
+functions/node_modules/
+functions/.firebase/
+functions/*.log
+
+# iOS関連
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+ios/Runner.xcworkspace/xcuserdata/
+ios/Runner.xcodeproj/xcuserdata/
+*.mobileprovision
+*.p12
+*.p8
+
+# Android関連
+android/local.properties
+android/.gradle/
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+
+# IDE関連
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# 一時ファイル・キャッシュ
+*.tmp
+*.temp
+*.cache
+.firebase/
+
+# プラットフォーム固有
+# macOS
+macos/Flutter/ephemeral/
+macos/Flutter/flutter_export_environment.sh
+
+# Linux
+linux/flutter/ephemeral/
+
+# Windows  
+windows/flutter/ephemeral/
+
+# Claude Code関連
+CLAUDE.md
+.claude/
+aiPersona改善案.md
+How_to_test_on_iPhone.md
+ココロの天気現状.md
+ココロの天気要件.md
+現状解析.md
+実装完了サマリー.md
+進捗.md
+
+# バックアップファイル
+*.backup
+pubspec_deleted.lock
+pubspec.yaml.backup
+
+# その他
+ephemeral/
+coverage/
+.fvm/

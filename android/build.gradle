@@ -1,0 +1,49 @@
+/*
+buildscript {
+    ext {
+        kotlin_version = '2.1.0'
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath 'com.google.gms:google-services:4.4.2'
+    }
+}
+*/
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    project.evaluationDependsOn(":app")
+
+    // afterEvaluate の代わりに、こちらの方法を使います
+    // Androidプラグインが適用されたプロジェクトに対して、設定を直接追加する
+    plugins.withType(com.android.build.gradle.BasePlugin) {
+        android {
+            buildFeatures {
+                buildConfig true
+            }
+        }
+    }
+}
