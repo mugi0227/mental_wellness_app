@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:mental_wellness_app/core/theme/app_theme.dart';
 import 'package:mental_wellness_app/screens/partner_link_screen.dart';
@@ -194,7 +195,9 @@ class _OtherOptionsScreenState extends State<OtherOptionsScreen> {
               _MenuItem(
                 icon: Icons.phonelink_setup,
                 title: 'アクセス許可設定',
-                subtitle: 'ヘルスデータと位置情報の許可',
+                subtitle: kIsWeb 
+                    ? 'アプリ権限の管理' 
+                    : 'ヘルスデータと位置情報の許可',
                 onTap: () {
                   Navigator.push(
                     context,

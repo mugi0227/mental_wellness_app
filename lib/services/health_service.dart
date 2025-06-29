@@ -1,28 +1,36 @@
-import 'package:health/health.dart';
-import 'package:flutter/foundation.dart'; // Required for debugPrint
-import 'dart:io';
+import 'package:flutter/foundation.dart'; // Required for debugPrint and kIsWeb
+import 'health_service_stub.dart'
+    if (dart.library.io) 'health_service_mobile.dart'
+    if (dart.library.html) 'health_service_web.dart';
 
 class HealthService {
-  static final Health _health = Health();
+  static dynamic _health;
   static bool _isAuthorized = false;
+  
+  static void _initializeHealth() {
+    if (!kIsWeb) {
+      _health = getHealthInstance();
+    }
+  }
 
   // Define the data types you want to access
-  static const List<HealthDataType> _dataTypes = [
-    HealthDataType.SLEEP_ASLEEP,      // 睡眠時間 (睡眠中)
-    HealthDataType.SLEEP_AWAKE,       // 睡眠時間 (覚醒)
-    HealthDataType.SLEEP_IN_BED,      // ベッドにいた時間
-    HealthDataType.STEPS,             // 歩数
-    HealthDataType.ACTIVE_ENERGY_BURNED, // アクティブカロリー
-    // Add other types as needed, e.g., HEART_RATE, BODY_TEMPERATURE
-  ];
+  static List<dynamic> get _dataTypes {
+    if (kIsWeb) return [];
+    return getHealthDataTypes();
+  }
 
   static Future<bool> checkHealthPermissions() async {
+    if (kIsWeb) {
+      debugPrint('Health permissions not available on Web');
+      return false;
+    }
+    
     try {
-      final types = Platform.isIOS 
-          ? [HealthDataType.SLEEP_ASLEEP]
-          : [HealthDataType.SLEEP_SESSION];
+      final types = isIOS() 
+          ? [getSleepAsleepType()]
+          : [getSleepSessionType()];
       
-      return await _health.hasPermissions(types) ?? false;
+      return await hasHealthPermissions(_health, types) ?? false;
     } catch (e) {
       debugPrint('Error checking health permissions: $e');
       return false;
@@ -30,14 +38,19 @@ class HealthService {
   }
 
   static Future<bool> requestHealthPermissions() async {
+    if (kIsWeb) {
+      debugPrint('Health permissions not available on Web');
+      return false;
+    }
+    
     try {
-      final types = Platform.isIOS 
-          ? [HealthDataType.SLEEP_ASLEEP]
-          : [HealthDataType.SLEEP_SESSION];
+      final types = isIOS() 
+          ? [getSleepAsleepType()]
+          : [getSleepSessionType()];
       
-      final permissions = [HealthDataAccess.READ];
+      final permissions = [getReadPermission()];
       
-      return await _health.requestAuthorization(types, permissions: permissions);
+      return await requestHealthAuthorization(_health, types, permissions);
     } catch (e) {
       debugPrint('Error requesting health permissions: $e');
       return false;
@@ -48,6 +61,12 @@ class HealthService {
   /// Returns true if authorization is granted, false otherwise.
   Future<bool> requestAuthorization() async {
     if (_isAuthorized) return true;
+    if (kIsWeb) {
+      debugPrint('Health authorization not available on Web');
+      return false;
+    }
+    
+    _initializeHealth();
 
     // Request authorization for all defined types
     // The HealthFactory constructor has an optional types parameter, 
@@ -56,7 +75,7 @@ class HealthService {
     // For HealthKit, usage descriptions (NSHealthShareUsageDescription, NSHealthUpdateUsageDescription)
     // need to be added to Info.plist.
     try {
-      _isAuthorized = await _health.requestAuthorization(_dataTypes);
+      _isAuthorized = await requestHealthAuthorizationForTypes(_health, _dataTypes);
       return _isAuthorized;
     } catch (e) {
       debugPrint("Error requesting health authorization: $e");
@@ -65,23 +84,30 @@ class HealthService {
   }
 
   static Future<double?> getSleepData(DateTime startDate, DateTime endDate) async {
+    if (kIsWeb) {
+      debugPrint('Sleep data not available on Web');
+      return null;
+    }
+    
     try {
-      final types = Platform.isIOS
-          ? [HealthDataType.SLEEP_ASLEEP]
-          : [HealthDataType.SLEEP_SESSION];
+      final types = isIOS()
+          ? [getSleepAsleepType()]
+          : [getSleepSessionType()];
       
-      final healthData = await _health.getHealthDataFromTypes(
-        startTime: startDate,
-        endTime: endDate,
-        types: types,
+      final healthData = await getHealthDataFromTypes(
+        _health,
+        startDate,
+        endDate,
+        types,
       );
       
       if (healthData.isEmpty) return null;
       
       double totalMinutes = 0;
       for (final point in healthData) {
-        if (point.value is NumericHealthValue) {
-          totalMinutes += (point.value as NumericHealthValue).numericValue.toDouble();
+        final numericValue = getNumericHealthValue(point);
+        if (numericValue != null) {
+          totalMinutes += numericValue;
         }
       }
       
@@ -93,20 +119,21 @@ class HealthService {
   }
 
   /// Fetches sleep data for the given date range.
-  Future<List<HealthDataPoint>> getSleepDataPoints(DateTime startDate, DateTime endDate) async {
+  Future<List<dynamic>> getSleepDataPoints(DateTime startDate, DateTime endDate) async {
     if (!_isAuthorized) {
       debugPrint("Health data not authorized. Please request authorization first.");
       bool authorized = await requestAuthorization();
       if (!authorized) return [];
     }
 
-    List<HealthDataPoint> sleepData = [];
+    List<dynamic> sleepData = [];
     try {
       // Fetch sleep data (asleep duration)
-      List<HealthDataPoint> asleep = await _health.getHealthDataFromTypes(
-        startTime: startDate,
-        endTime: endDate,
-        types: [HealthDataType.SLEEP_ASLEEP],
+      List<dynamic> asleep = await getHealthDataFromTypes(
+        _health,
+        startDate,
+        endDate,
+        [getSleepAsleepType()],
       );
       sleepData.addAll(asleep);
       // You might want to process different sleep types (SLEEP_AWAKE, SLEEP_IN_BED)
@@ -127,14 +154,16 @@ class HealthService {
 
     int totalSteps = 0;
     try {
-      List<HealthDataPoint> stepsData = await _health.getHealthDataFromTypes(
-        startTime: startDate,
-        endTime: endDate,
-        types: [HealthDataType.STEPS],
+      List<dynamic> stepsData = await getHealthDataFromTypes(
+        _health,
+        startDate,
+        endDate,
+        [getStepsType()],
       );
       for (var dataPoint in stepsData) {
-        if (dataPoint.value is NumericHealthValue) {
-          totalSteps += (dataPoint.value as NumericHealthValue).numericValue.toInt();
+        final numericValue = getNumericHealthValue(dataPoint);
+        if (numericValue != null) {
+          totalSteps += numericValue.toInt();
         }
       }
     } catch (e) {
@@ -153,14 +182,16 @@ class HealthService {
 
     double totalEnergy = 0.0;
     try {
-      List<HealthDataPoint> energyData = await _health.getHealthDataFromTypes(
-        startTime: startDate,
-        endTime: endDate,
-        types: [HealthDataType.ACTIVE_ENERGY_BURNED],
+      List<dynamic> energyData = await getHealthDataFromTypes(
+        _health,
+        startDate,
+        endDate,
+        [getActiveEnergyType()],
       );
       for (var dataPoint in energyData) {
-         if (dataPoint.value is NumericHealthValue) {
-          totalEnergy += (dataPoint.value as NumericHealthValue).numericValue.toDouble();
+        final numericValue = getNumericHealthValue(dataPoint);
+        if (numericValue != null) {
+          totalEnergy += numericValue;
         }
       }
     } catch (e) {
@@ -170,17 +201,17 @@ class HealthService {
   }
 
   // Example of how to get various data types in one call
-  Future<Map<HealthDataType, List<HealthDataPoint>>> getAllRequestedData(DateTime startDate, DateTime endDate) async {
+  Future<Map<dynamic, List<dynamic>>> getAllRequestedData(DateTime startDate, DateTime endDate) async {
     if (!_isAuthorized) {
       debugPrint("Health data not authorized. Please request authorization first.");
       bool authorized = await requestAuthorization();
       if (!authorized) return {};
     }
     
-    Map<HealthDataType, List<HealthDataPoint>> allData = {};
+    Map<dynamic, List<dynamic>> allData = {};
     try {
-      for (HealthDataType type in _dataTypes) {
-        List<HealthDataPoint> points = await _health.getHealthDataFromTypes(startTime: startDate, endTime: endDate, types: [type]);
+      for (dynamic type in _dataTypes) {
+        List<dynamic> points = await getHealthDataFromTypes(_health, startDate, endDate, [type]);
         allData[type] = points;
       }
     } catch (e) {

@@ -11,7 +11,9 @@ import 'package:mental_wellness_app/features/user_specific/medication_tracker/pr
 import 'package:mental_wellness_app/features/user_specific/medication_tracker/presentation/screens/pharmacist_chat_screen.dart'; // 薬剤師チャット画面
 import 'package:mental_wellness_app/services/cloud_function_service.dart'; // Cloud Functionsサービスをインポート
 import 'package:mental_wellness_app/features/user_specific/mood_graph/presentation/screens/mood_graph_screen.dart'; // 気分グラフ画面
-import 'package:mental_wellness_app/features/user_specific/health_data/presentation/screens/health_data_screen.dart'; // ヘルスデータ画面
+// ヘルスデータ画面は条件付きインポート
+import 'package:flutter/foundation.dart';
+// Web では HealthDataScreen は使用しない
 import 'package:mental_wellness_app/screens/empathetic_chat_screen.dart';
 import 'package:mental_wellness_app/core/theme/app_theme.dart';
 import 'package:mental_wellness_app/models/daily_event_model.dart';

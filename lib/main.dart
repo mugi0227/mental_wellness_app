@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // kIsWebを使用するために追加
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/date_symbol_data_local.dart'; // DateFormatの日本語ロケール初期化のため
@@ -11,17 +12,34 @@ import 'package:mental_wellness_app/features/partner_specific/ai_comm_soudan/pre
 import 'package:mental_wellness_app/services/notification_service.dart'; // NotificationServiceをインポート
 import 'package:mental_wellness_app/services/local_notification_service.dart'; // LocalNotificationServiceをインポート
 import 'package:mental_wellness_app/core/theme/app_theme.dart'; // AppThemeをインポート
+import 'firebase_options.dart'; 
 
 // Global navigator key to access navigator from outside widget tree
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: ".env"); // Load environment variables
-  await Firebase.initializeApp(); // Firebase initialization restored
+  
+  // .env ファイルの読み込み（Web でも対応）
+  try {
+    await dotenv.load(fileName: ".env"); // Load environment variables
+  } catch (e) {
+    if (kDebugMode) {
+      print('Warning: Could not load .env file: $e');
+    }
+    // Web では .env ファイルが読み込めない場合があるが、継続する
+  }
+  
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   await initializeDateFormatting('ja_JP', null); // 日本語ロケールの初期化
   await NotificationService().initialize(); // NotificationServiceを初期化
-  await LocalNotificationService().initialize(); // LocalNotificationServiceを初期化
+  
+  // LocalNotificationService は Web では初期化をスキップ
+  if (!kIsWeb) {
+    await LocalNotificationService().initialize(); // LocalNotificationServiceを初期化
+  }
   
   // デバッグ用: 現在のユーザー状態を確認
   final currentUser = FirebaseAuth.instance.currentUser;

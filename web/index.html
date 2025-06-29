@@ -30,7 +30,79 @@
   <link rel="icon" type="image/png" href="favicon.png"/>
 
   <title>mental_wellness_app</title>
+  <meta name="flutter-web-renderer" content="html">
   <link rel="manifest" href="manifest.json">
+
+  <!-- Firebase SDK - バージョンを pubspec.yaml に合わせて調整 -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
+
+  <script>
+    console.log('Firebase SDK スクリプトが読み込まれました');
+    
+    // Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyAbjhCCwakzWtuL3QH4epun4l4PxsSKgwk",
+      authDomain: "mental-wellness-app-f9de6.firebaseapp.com",
+      projectId: "mental-wellness-app-f9de6",
+      storageBucket: "mental-wellness-app-f9de6.firebasestorage.app",
+      messagingSenderId: "799464802692",
+      appId: "1:799464802692:web:3b8507b24ffcf7e00db5d1",
+      measurementId: "G-S262ZN8SYD"
+    };
+
+    try {
+      // Initialize Firebase
+      console.log('Firebase を初期化中...');
+      firebase.initializeApp(firebaseConfig);
+      console.log('Firebase 初期化完了');
+      
+      // Analytics は optional なので try-catch で囲む
+      try {
+        firebase.analytics();
+        console.log('Firebase Analytics 初期化完了');
+      } catch (analyticsError) {
+        console.warn('Firebase Analytics の初期化に失敗:', analyticsError);
+      }
+    } catch (error) {
+      console.error('Firebase の初期化に失敗:', error);
+    }
+    
+    // Flutter 初期化状態を監視
+    window.addEventListener('load', function() {
+      console.log('ページの読み込み完了');
+      
+      // Flutter アプリの初期化を待つ
+      let checkCount = 0;
+      const maxChecks = 50; // 10秒間（200ms x 50）
+      
+      const checkFlutter = setInterval(function() {
+        checkCount++;
+        console.log(`Flutter アプリのチェック ${checkCount}/${maxChecks}`);
+        
+        if (window.flutterCanvasKit || document.querySelector('flutter-view') || document.querySelector('flt-glass-pane')) {
+          console.log('Flutter アプリが見つかりました');
+          clearInterval(checkFlutter);
+        } else if (checkCount >= maxChecks) {
+          console.error('Flutter アプリの初期化がタイムアウトしました');
+          clearInterval(checkFlutter);
+        }
+      }, 200);
+    });
+    
+    // エラーハンドリング
+    window.addEventListener('error', function(event) {
+      console.error('グローバルエラー:', event.error);
+    });
+    
+    window.addEventListener('unhandledrejection', function(event) {
+      console.error('未処理のPromise拒否:', event.reason);
+    });
+  </script>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

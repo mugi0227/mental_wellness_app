@@ -37,15 +37,13 @@ class NotificationService {
       print('User granted permission: ${settings.authorizationStatus}');
     }
 
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+    // ユーザーが通知を許可した場合のみ、リスナー設定とトークン取得に進む
+    if (settings.authorizationStatus == AuthorizationStatus.authorized || 
+        settings.authorizationStatus == AuthorizationStatus.provisional) {
+          
       _setupFCMListeners();
-      _getAndSaveFCMToken();
-    } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
-      if (kDebugMode) {
-        print('User granted provisional permission');
-      }
-      _setupFCMListeners();
-      _getAndSaveFCMToken();
+      await _getAndSaveFCMToken();
+
     } else {
       if (kDebugMode) {
         print('User declined or has not accepted permission');
@@ -91,32 +89,29 @@ class NotificationService {
         if (kDebugMode) {
           print('Message also contained a notification: ${message.notification?.title} / ${message.notification?.body}');
         }
-        // Display an in-app dialog for foreground messages
         if (navigatorKey.currentState?.mounted == true && navigatorKey.currentState?.context != null && message.notification != null) {
            _showNotificationDialog(message, navigatorKey.currentState!.context);
         }
       }
     });
 
-    // Handle messages when app is opened from a terminated state by tapping on a notification
+    // Handle messages when app is opened from a terminated state
     FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
       if (message != null) {
         if (kDebugMode) {
           print('App opened from terminated state by notification: ${message.messageId}');
         }
-        // Handle navigation or specific action based on message.data
         if (navigatorKey.currentState?.mounted == true && navigatorKey.currentState?.context != null && message.notification != null) {
           _showNotificationDialog(message, navigatorKey.currentState!.context);
         }
       }
     });
     
-    // Handle messages when app is opened from a background state by tapping on a notification
+    // Handle messages when app is opened from a background state
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       if (kDebugMode) {
         print('App opened from background by notification: ${message.messageId}');
       }
-      // Handle navigation or specific action based on message.data
       if (navigatorKey.currentState?.mounted == true && navigatorKey.currentState?.context != null && message.notification != null) {
         _showNotificationDialog(message, navigatorKey.currentState!.context);
       }
@@ -126,6 +121,7 @@ class NotificationService {
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   }
 
+  // ★★★ ここからが修正の核心部分です ★★★
   Future<void> _getAndSaveFCMToken() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -135,7 +131,6 @@ class NotificationService {
       return;
     }
 
-    // Check if user profile exists before attempting to save FCM token
     final userProfile = await _firestoreService.getUserProfile(user.uid);
     if (userProfile == null) {
       if (kDebugMode) {
@@ -145,7 +140,17 @@ class NotificationService {
     }
 
     try {
-      String? token = await _firebaseMessaging.getToken();
+      String? token;
+      // Webかどうかでトークンの取得方法を分岐させる
+      if (kIsWeb) {
+        // Firebaseコンソールで取得したVAPIDキーを指定
+        const String? vapidKey = "BFZ1LmrXX0DEFFauaws3Gaq7KkF3B6mkDk_VZ3cynVDkthz4AX4ODbyfdg9I5vA7gOrunA2Q5K5B_62vfIA_gLI"; 
+        token = await _firebaseMessaging.getToken(vapidKey: vapidKey);
+      } else {
+        // モバイルの場合はVAPIDキーは不要
+        token = await _firebaseMessaging.getToken();
+      }
+
       if (token != null) {
         if (kDebugMode) {
           print('FCM Token: $token');
@@ -162,17 +167,16 @@ class NotificationService {
       }
     }
 
-    // Listen for token refresh
+    // Listen for token refresh (この部分は元のままでOK)
     _firebaseMessaging.onTokenRefresh.listen((newToken) {
       if (kDebugMode) {
         print('FCM Token Refreshed: $newToken');
       }
-      // user is guaranteed to be non-null here because the parent function _getAndSaveFCMToken would have returned early if user was null.
       _firestoreService.saveUserFCMToken(user.uid, newToken);
     });
   }
 
-  // Example method to subscribe to a topic
+  // 以下、他のメソッドは変更なし
   Future<void> subscribeToTopic(String topic) async {
     await _firebaseMessaging.subscribeToTopic(topic);
     if (kDebugMode) {
@@ -180,7 +184,6 @@ class NotificationService {
     }
   }
 
-  // Example method to unsubscribe from a topic
   Future<void> unsubscribeFromTopic(String topic) async {
     await _firebaseMessaging.unsubscribeFromTopic(topic);
     if (kDebugMode) {

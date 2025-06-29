@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/foundation.dart';
 import 'package:mental_wellness_app/core/theme/app_theme.dart';
 import 'package:mental_wellness_app/services/health_service.dart';
+// permission_handler は Web では使用しない
+// Web では異なる権限モデルを使用
 
 class PermissionsSettingsScreen extends StatefulWidget {
   const PermissionsSettingsScreen({super.key});
@@ -26,13 +28,22 @@ class _PermissionsSettingsScreenState extends State<PermissionsSettingsScreen> {
     setState(() => _isLoading = true);
     
     final healthStatus = await HealthService.checkHealthPermissions();
-    final locationStatus = await Permission.location.status;
-    final notificationStatus = await Permission.notification.status;
+    
+    // Web では権限チェックをスキップ
+    bool locationGranted = false;
+    bool notificationGranted = false;
+    
+    if (!kIsWeb) {
+      // モバイルでのみ権限チェックを実行
+      // permission_handler の代わりに手動で実装が必要
+      locationGranted = false; // TODO: 実装が必要
+      notificationGranted = false; // TODO: 実装が必要
+    }
     
     setState(() {
       _healthPermissionGranted = healthStatus;
-      _locationPermissionGranted = locationStatus.isGranted;
-      _notificationPermissionGranted = notificationStatus.isGranted;
+      _locationPermissionGranted = locationGranted;
+      _notificationPermissionGranted = notificationGranted;
       _isLoading = false;
     });
   }
@@ -56,14 +67,26 @@ class _PermissionsSettingsScreenState extends State<PermissionsSettingsScreen> {
   }
 
   Future<void> _requestLocationPermission() async {
-    final status = await Permission.location.request();
-    setState(() => _locationPermissionGranted = status.isGranted);
+    if (kIsWeb) {
+      // Web では位置情報はブラウザの API を使用
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Webではブラウザの位置情報設定を使用してください')),
+        );
+      }
+      return;
+    }
     
-    if (status.isGranted && mounted) {
+    // モバイルでのみ実行
+    // TODO: permission_handler の代替実装が必要
+    
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('位置情報へのアクセスが許可されました')),
+        const SnackBar(content: Text('位置情報権限のリクエスト機能は未実装です')),
       );
-    } else if (status.isPermanentlyDenied && mounted) {
+    }
+    
+    if (false) { // 古いコードをコメントアウト
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -77,7 +100,7 @@ class _PermissionsSettingsScreenState extends State<PermissionsSettingsScreen> {
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
-                openAppSettings();
+                // openAppSettings(); // Web では使用不可
               },
               child: const Text('設定を開く'),
             ),
@@ -88,12 +111,22 @@ class _PermissionsSettingsScreenState extends State<PermissionsSettingsScreen> {
   }
 
   Future<void> _requestNotificationPermission() async {
-    final status = await Permission.notification.request();
-    setState(() => _notificationPermissionGranted = status.isGranted);
+    if (kIsWeb) {
+      // Web ではブラウザの通知 API を使用
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Webではブラウザの通知設定を使用してください')),
+        );
+      }
+      return;
+    }
     
-    if (status.isGranted && mounted) {
+    // モバイルでのみ実行
+    // TODO: permission_handler の代替実装が必要
+    
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('通知が許可されました')),
+        const SnackBar(content: Text('通知権限のリクエスト機能は未実装です')),
       );
     }
   }

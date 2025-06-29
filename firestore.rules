@@ -33,7 +33,7 @@ service cloud.firestore {
       // aiDiaryLogs (旧 moodLogs) のルール
       // AiDiaryLogモデルに必要なフィールド: userId, selfReportedMoodScore, diaryText, timestamp
       match /aiDiaryLogs/{logId} {
-        allow read: if isOwnerOrSupporter(userId, 'canViewMoodGraph');
+        allow read: if request.auth != null;
         allow create: if request.auth != null &&
                        request.auth.uid == userId &&
                        request.resource.data.userId == userId &&

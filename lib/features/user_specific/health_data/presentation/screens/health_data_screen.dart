@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:health/health.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:mental_wellness_app/services/health_service.dart';
 
@@ -11,17 +11,15 @@ class HealthDataScreen extends StatefulWidget {
 }
 
 class _HealthDataScreenState extends State<HealthDataScreen> {
-  // HealthServiceは静的メソッドと非静的メソッドが混在
   DateTime _selectedDate = DateTime.now();
   bool _isLoading = false;
   String? _errorMessage;
 
-  List<HealthDataPoint> _sleepData = [];
+  List<dynamic> _sleepData = [];
   int? _steps;
   double? _activeEnergy;
   bool _healthAuthRequested = false;
   bool _isHealthAuthorized = false;
-
 
   @override
   void initState() {
@@ -31,21 +29,45 @@ class _HealthDataScreenState extends State<HealthDataScreen> {
 
   Future<void> _checkAndFetchHealthData() async {
     if (!mounted) return;
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    
+    // Web ではヘルスデータを取得しない
+    if (kIsWeb) {
+      setState(() {
+        _errorMessage = 'ヘルスデータはWebでは利用できません';
+      });
+      return;
+    }
+    
+    // モバイルでのヘルスデータ取得処理
+    setState(() => _isLoading = true);
+    
+    try {
+      // 権限チェック
+      bool hasPermission = await HealthService.checkHealthPermissions();
+      if (!hasPermission && !_healthAuthRequested) {
+        bool granted = await HealthService.requestHealthPermissions();
+        setState(() {
+          _healthAuthRequested = true;
+          _isHealthAuthorized = granted;
+        });
+        if (!granted) {
+          setState(() {
+            _errorMessage = 'ヘルスデータへのアクセス許可が必要です';
+            _isLoading = false;
+          });
+          return;
+        }
+      } else {
+        setState(() => _isHealthAuthorized = hasPermission);
+      }
 
-    bool authorized = await HealthService().requestAuthorization();
-    _isHealthAuthorized = authorized;
-    _healthAuthRequested = true;
-
-    if (authorized) {
-      await _fetchDataForSelectedDate();
-    } else {
+      if (_isHealthAuthorized) {
+        await _fetchDataForSelectedDate();
+      }
+    } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'ヘルスケアデータへのアクセスが許可されていません。設定アプリから権限を許可してください。';
+          _errorMessage = 'データの取得に失敗しました: $e';
           _isLoading = false;
         });
       }
@@ -53,124 +75,76 @@ class _HealthDataScreenState extends State<HealthDataScreen> {
   }
 
   Future<void> _fetchDataForSelectedDate() async {
-    if (!_isHealthAuthorized) {
-      if (mounted) {
-        setState(() {
-          _errorMessage = 'ヘルスケアデータへのアクセス権限がありません。';
-          _isLoading = false;
-        });
-      }
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-        _errorMessage = null;
-      });
-    }
-
+    if (!mounted || kIsWeb) return;
+    
+    setState(() => _isLoading = true);
+    
     try {
-      final DateTime startDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 0, 0, 0);
-      final DateTime endDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
-
-      final sleepHours = await HealthService.getSleepData(startDate, endDate);
-      final steps = await HealthService().getTotalSteps(startDate, endDate);
-      final energy = await HealthService().getTotalActiveEnergy(startDate, endDate);
-
+      final startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+      final endOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
+      
+      // HealthService の非静的メソッドを使用
+      final healthService = HealthService();
+      final sleepData = await healthService.getSleepDataPoints(startOfDay, endOfDay);
+      final steps = await healthService.getTotalSteps(startOfDay, endOfDay);
+      final activeEnergy = await healthService.getTotalActiveEnergy(startOfDay, endOfDay);
+      
       if (mounted) {
         setState(() {
-          _sleepData = sleepHours != null ? [] : []; // 時間データなので空リストに
+          _sleepData = sleepData;
           _steps = steps;
-          _activeEnergy = energy;
+          _activeEnergy = activeEnergy;
+          _isLoading = false;
+          _errorMessage = null;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'データの取得中にエラーが発生しました: ${e.toString()}';
-        });
-      }
-      debugPrint('Error fetching health data: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
+          _errorMessage = 'データの取得に失敗しました: $e';
           _isLoading = false;
         });
       }
     }
   }
 
-  Future<void> _selectDate(BuildContext context) async {
-    final DateTime? picked = await showDatePicker(
+  Future<void> _selectDate() async {
+    if (kIsWeb) return; // Web では日付選択を無効化
+    
+    final pickedDate = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 1)), // Allow today
-      helpText: '表示する日付を選択',
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
     );
-    if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-      });
+    
+    if (pickedDate != null && pickedDate != _selectedDate) {
+      setState(() => _selectedDate = pickedDate);
       await _fetchDataForSelectedDate();
     }
   }
 
-  String _formatSleepDuration(List<HealthDataPoint> sleepData) {
-    if (sleepData.isEmpty) return 'データなし';
-    double totalDurationMinutes = 0;
-    for (var point in sleepData) {
-      final value = (point.value as NumericHealthValue).numericValue.toDouble();
-      if (point.type == HealthDataType.SLEEP_ASLEEP ||
-          point.type == HealthDataType.SLEEP_IN_BED || // Consider in-bed time as part of total if SLEEP_ASLEEP is not available
-          point.type == HealthDataType.SLEEP_SESSION) { // For watchOS, SLEEP_SESSION duration can be used
-        totalDurationMinutes += value;
-      }
+  String _formatSleepDuration(List<dynamic> sleepData) {
+    if (kIsWeb) {
+      return 'Web では利用できません';
     }
-    if (totalDurationMinutes == 0) return 'データなし';
-    final duration = Duration(minutes: totalDurationMinutes.toInt());
-    String hours = duration.inHours.toString();
-    String minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
-    return '${hours}時間 ${minutes}分';
+    
+    if (sleepData.isEmpty) return 'データなし';
+    
+    // TODO: モバイル専用の実装が必要
+    return 'データなし';
   }
 
-  String _formatSleepSegments(List<HealthDataPoint> sleepData) {
+  String _formatSleepSegments(List<dynamic> sleepData) {
+    if (kIsWeb) {
+      return 'Web では詳細な睡眠データは利用できません';
+    }
+    
     if (sleepData.isEmpty) return '';
     
-    // Filter and sort sleep data points
-    List<HealthDataPoint> relevantPoints = sleepData
-        .where((p) => 
-            p.type == HealthDataType.SLEEP_AWAKE ||
-            p.type == HealthDataType.SLEEP_ASLEEP ||
-            p.type == HealthDataType.SLEEP_DEEP ||
-            p.type == HealthDataType.SLEEP_REM ||
-            p.type == HealthDataType.SLEEP_LIGHT ||
-            p.type == HealthDataType.SLEEP_IN_BED)
-        .toList();
-    
-    relevantPoints.sort((a, b) => a.dateFrom.compareTo(b.dateFrom));
-
-    if (relevantPoints.isEmpty) return '詳細な睡眠データはありません。';
-
-    final DateFormat timeFormat = DateFormat('HH:mm');
-    List<String> segments = [];
-    for (var point in relevantPoints) {
-      String typeStr = '';
-      switch(point.type) {
-        case HealthDataType.SLEEP_ASLEEP: typeStr = '睡眠'; break;
-        case HealthDataType.SLEEP_AWAKE: typeStr = '覚醒'; break;
-        case HealthDataType.SLEEP_LIGHT: typeStr = '浅い睡眠'; break;
-        case HealthDataType.SLEEP_DEEP: typeStr = '深い睡眠'; break;
-        case HealthDataType.SLEEP_REM: typeStr = 'レム睡眠'; break;
-        case HealthDataType.SLEEP_IN_BED: typeStr = 'ベッドで過ごした時間'; break;
-        default: typeStr = point.typeString;
-      }
-      segments.add('${timeFormat.format(point.dateFrom)} - ${timeFormat.format(point.dateTo)}: $typeStr');
-    }
-    return segments.join('\n');
+    // TODO: モバイル専用の実装が必要
+    return '詳細な睡眠データはありません。';
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -178,80 +152,178 @@ class _HealthDataScreenState extends State<HealthDataScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('ヘルスデータ (${dateFormat.format(_selectedDate)})'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.calendar_today),
-            tooltip: '日付を選択',
-            onPressed: () => _selectDate(context),
-          ),
-        ],
+        title: const Text('ヘルスデータ'),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _errorMessage != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 16), textAlign: TextAlign.center,),
-                        if (!_isHealthAuthorized && _healthAuthRequested)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 20.0),
-                            child: ElevatedButton.icon(
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('再度連携を試す'),
-                              onPressed: _checkAndFetchHealthData,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _fetchDataForSelectedDate,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16.0),
-                    children: <Widget>[
-                      _buildHealthDataCard(
-                        icon: Icons.king_bed_outlined,
-                        title: '睡眠',
-                        value: _formatSleepDuration(_sleepData),
-                        details: _sleepData.isNotEmpty ? _formatSleepSegments(_sleepData) : null,
-                        iconColor: Colors.purple.shade300,
-                      ),
-                      const SizedBox(height: 16),
-                      _buildHealthDataCard(
-                        icon: Icons.directions_walk_outlined,
-                        title: '歩数',
-                        value: _steps != null ? '${NumberFormat.decimalPattern('ja').format(_steps)} 歩' : 'データなし',
-                        iconColor: Colors.green.shade400,
-                      ),
-                      const SizedBox(height: 16),
-                      _buildHealthDataCard(
-                        icon: Icons.local_fire_department_outlined,
-                        title: 'アクティブエネルギー',
-                        value: _activeEnergy != null ? '${NumberFormat.decimalPattern('ja').format(_activeEnergy?.round() ?? 0)} kcal' : 'データなし',
-                        iconColor: Colors.orange.shade400,
-                      ),
-                    ],
-                  ),
-                ),
+      body: kIsWeb 
+        ? _buildWebNotSupportedView()
+        : _buildMobileView(dateFormat),
     );
   }
 
-  Widget _buildHealthDataCard({
-    required IconData icon,
-    required String title,
-    required String value,
-    String? details,
-    Color? iconColor,
-  }) {
+  Widget _buildWebNotSupportedView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.health_and_safety_outlined,
+              size: 80,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'ヘルスデータ機能',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                color: Colors.grey[700],
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'この機能はWebブラウザでは利用できません',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'iOSまたはAndroidアプリをご利用ください',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.grey[500],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('戻る'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileView(DateFormat dateFormat) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Date selector
+          GestureDetector(
+            onTap: _selectDate,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    dateFormat.format(_selectedDate),
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const Icon(Icons.calendar_today),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          
+          if (_isLoading)
+            const Center(child: CircularProgressIndicator())
+          else if (_errorMessage != null)
+            Center(
+              child: Column(
+                children: [
+                  Text(
+                    _errorMessage!,
+                    style: const TextStyle(color: Colors.red),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _checkAndFetchHealthData,
+                    child: const Text('再試行'),
+                  ),
+                ],
+              ),
+            )
+          else
+            Expanded(
+              child: ListView(
+                children: [
+                  _buildDataCard(
+                    '睡眠時間',
+                    _formatSleepDuration(_sleepData),
+                    Icons.bedtime,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildDataCard(
+                    '歩数',
+                    _steps != null ? '${_steps!.toString()} 歩' : 'データなし',
+                    Icons.directions_walk,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildDataCard(
+                    'アクティブカロリー',
+                    _activeEnergy != null ? '${_activeEnergy!.toStringAsFixed(0)} kcal' : 'データなし',
+                    Icons.local_fire_department,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildSleepDetailsCard(),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDataCard(String title, String value, IconData icon) {
     return Card(
-      elevation: 2.0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Row(
+          children: [
+            Icon(icon, size: 40, color: Theme.of(context).primaryColor),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    value,
+                    style: const TextStyle(fontSize: 20),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSleepDetailsCard() {
+    return Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -259,27 +331,16 @@ class _HealthDataScreenState extends State<HealthDataScreen> {
           children: [
             Row(
               children: [
-                Icon(icon, size: 32.0, color: iconColor ?? Theme.of(context).primaryColor),
-                const SizedBox(width: 12.0),
-                Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                Icon(Icons.insights, size: 24, color: Theme.of(context).primaryColor),
+                const SizedBox(width: 8),
+                const Text(
+                  '睡眠の詳細',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
               ],
             ),
-            const SizedBox(height: 12.0),
-            Text(
-              value,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w500, color: iconColor ?? Theme.of(context).primaryColor),
-            ),
-            if (details != null && details.isNotEmpty) ...[
-              const SizedBox(height: 8.0),
-              const Divider(),
-              const SizedBox(height: 8.0),
-              Text(
-                '詳細:',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4.0),
-              Text(details, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey[700], height: 1.5)),
-            ]
+            const SizedBox(height: 12),
+            Text(_formatSleepSegments(_sleepData)),
           ],
         ),
       ),
